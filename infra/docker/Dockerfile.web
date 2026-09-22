@@ -1,0 +1,15 @@
+FROM node:22.14.0-bookworm-slim AS foundation
+
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+WORKDIR /workspace
+
+RUN corepack enable && corepack prepare pnpm@12.5.1 --activate
+
+COPY . .
+RUN pnpm install --frozen-lockfile
+
+ARG APP_NAME
+RUN pnpm --filter @ethio-tour/${APP_NAME}... build
+
+CMD ["pnpm", "--filter", "@ethio-tour/public-web", "start"]

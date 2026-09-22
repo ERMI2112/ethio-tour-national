@@ -1,0 +1,11 @@
+packages:
+  - apps/public-web
+  - apps/workspace-web
+  - apps/backend/api
+  - apps/backend/worker
+  - packages/*
+
+allowBuilds:
+  '@nestjs/core': true
+  esbuild: true
+  sharp: true

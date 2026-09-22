@@ -1,0 +1,31 @@
+{
+  "name": "ethio-tour-national",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=22.14.0 <23"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "db:generate": "pnpm --filter @ethio-tour/db db:generate",
+    "db:migrate": "pnpm --filter @ethio-tour/db db:migrate",
+    "dev": "pnpm --parallel --filter @ethio-tour/api --filter @ethio-tour/worker --filter @ethio-tour/public-web --filter @ethio-tour/workspace-web dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "pnpm -r --if-present lint",
+    "test": "pnpm build && pnpm -r --if-present test",
+    "typecheck": "pnpm build && pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.18.0",
+    "@types/node": "22.10.7",
+    "@types/react": "19.0.3",
+    "@types/react-dom": "19.0.2",
+    "eslint": "9.18.0",
+    "prettier": "3.5.3",
+    "typescript": "5.7.3",
+    "typescript-eslint": "8.20.0",
+    "vitest": "3.0.5"
+  }
+}

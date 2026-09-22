@@ -1,0 +1,24 @@
+{
+  "name": "@ethio-tour/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/main.js",
+  "dependencies": {
+    "@ethio-tour/authz": "workspace:*",
+    "@ethio-tour/backend-domain": "workspace:*",
+    "@ethio-tour/db": "workspace:*",
+    "@nestjs/common": "11.0.11",
+    "@nestjs/core": "11.0.11",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "lint": "eslint . --max-warnings=0",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

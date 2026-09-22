@@ -1,0 +1,19 @@
+{
+  "name": "@ethio-tour/public-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev -p ${PORT:-3000}",
+    "lint": "eslint . --max-warnings=0",
+    "start": "next start -p ${PORT:-3000}",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ethio-tour/api-client": "workspace:*",
+    "next": "15.1.6",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  }
+}
