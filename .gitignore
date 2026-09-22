@@ -3,6 +3,7 @@ dist/
 .next/
 coverage/
 .turbo/
+.freebuff/
 
 .env
 .env.*

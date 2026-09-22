@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev -p ${PORT:-3000}",
+    "dev": "node ../../scripts/next-with-port.cjs dev 3000",
     "lint": "eslint . --max-warnings=0",
-    "start": "next start -p ${PORT:-3000}",
+    "start": "node ../../scripts/next-with-port.cjs start 3000",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

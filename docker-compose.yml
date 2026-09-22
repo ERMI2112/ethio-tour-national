@@ -124,7 +124,7 @@ services:
     profiles: [app]
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: production
       PORT: 4000
       RUN_MIGRATIONS: 'true'
       DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
@@ -165,7 +165,7 @@ services:
     profiles: [app]
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
       REDIS_URL: redis://redis:6379
       MAILPIT_SMTP_HOST: mailpit
@@ -180,12 +180,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    command: [pnpm, --filter, '@ethio-tour/worker', start]
     healthcheck:
       test:
         - CMD-SHELL
         - >-
-          node -e "process.exit(0)"
+          node -e "const fs=require('node:fs'); const live=fs.readdirSync('/proc').filter((entry)=>/^[0-9]+$/.test(entry)).some((pid)=>{try{return fs.readFileSync('/proc/'+pid+'/cmdline','utf8').includes('dist/main.js')}catch{return false}}); process.exit(live?0:1)"
       interval: 10s
       timeout: 3s
       retries: 10
@@ -199,7 +198,7 @@ services:
     profiles: [app]
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: production
       API_BASE_URL: http://api:4000/api
       PORT: 3000
     ports:
@@ -227,7 +226,7 @@ services:
     profiles: [app]
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: production
       API_BASE_URL: http://api:4000/api
       PORT: 3001
     ports:
@@ -235,7 +234,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    command: [pnpm, --filter, '@ethio-tour/workspace-web', start]
     healthcheck:
       test:
         - CMD-SHELL
