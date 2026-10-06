@@ -7,6 +7,23 @@ import {
 
 export type BackendServiceName = 'api' | 'worker';
 
+export { RegistryError, RegistryService } from './registry/registry-service';
+export { OutboxNotificationDispatcher } from './registry/outbox-dispatcher';
+export { PostgresRegistryStore } from './registry/postgres-registry-store';
+export type {
+  AuditRecord,
+  OutboxRecord,
+  PublicResourceRecord,
+  RegistryActor,
+  RegistryResourceRecord,
+  RegistryStore,
+  RegistryTransaction,
+  ResourceRevisionRecord,
+  ReviewDecisionRecord,
+  SubmissionRecord,
+  UnitScope,
+} from './registry/registry-store';
+
 export interface BackendRuntime {
   serviceName: BackendServiceName;
   databaseConfigured: boolean;

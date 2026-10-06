@@ -10,6 +10,7 @@
     "build": "pnpm -r --if-present build",
     "db:generate": "pnpm --filter @ethio-tour/db db:generate",
     "db:migrate": "pnpm --filter @ethio-tour/db db:migrate",
+    "db:seed:demo": "pnpm --filter @ethio-tour/db db:seed:demo",
     "dev": "pnpm --parallel --filter @ethio-tour/api --filter @ethio-tour/worker --filter @ethio-tour/public-web --filter @ethio-tour/workspace-web dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

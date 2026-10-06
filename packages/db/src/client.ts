@@ -4,9 +4,10 @@ import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import * as databaseSchema from './schema';
 
 export type Database = PostgresJsDatabase<typeof databaseSchema>;
+export type DatabaseClient = postgres.Sql;
 
 export function createDatabase(connectionString = process.env.DATABASE_URL): {
-  client: postgres.Sql;
+  client: DatabaseClient;
   db: Database;
 } {
   if (!connectionString) {

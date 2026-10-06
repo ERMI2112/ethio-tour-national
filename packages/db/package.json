@@ -23,6 +23,7 @@
     "build": "tsc -p tsconfig.build.json",
     "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
     "db:migrate": "tsx src/migrate-cli.ts",
+    "db:seed:demo": "tsx src/demo-seed-cli.ts",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"

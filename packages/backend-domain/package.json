@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@ethio-tour/authz": "workspace:*",
-    "@ethio-tour/db": "workspace:*"
+    "@ethio-tour/contracts": "workspace:*",
+    "@ethio-tour/db": "workspace:*",
+    "postgres": "3.4.5"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

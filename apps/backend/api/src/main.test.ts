@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-describe('API foundation', () => {
-  it('does not expose feature modules in Phase 1A', () => {
-    expect(process.env.NODE_ENV ?? 'test').toBeTypeOf('string');
+import { HealthController } from './health/health.controller';
+
+describe('API health contract', () => {
+  it('identifies the running API as Phase 1B', () => {
+    const health = new HealthController().getHealth();
+
+    expect(health).toMatchObject({ service: 'api', status: 'ok', phase: '1B' });
+    expect(Date.parse(health.timestamp)).not.toBeNaN();
   });
 });
