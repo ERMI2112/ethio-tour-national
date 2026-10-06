@@ -5,7 +5,7 @@ ENV PATH=$PNPM_HOME:$PATH
 ENV NODE_ENV=production
 WORKDIR /workspace
 
-RUN corepack enable && corepack prepare pnpm@12.5.1 --activate
+RUN npm install --global --no-audit --no-fund pnpm@12.5.1
 
 COPY . .
 RUN pnpm install --frozen-lockfile
