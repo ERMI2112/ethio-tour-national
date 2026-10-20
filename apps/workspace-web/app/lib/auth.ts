@@ -8,19 +8,8 @@
  * - sessionStorage may ONLY hold short-lived PKCE state and verifier values during the redirect dance.
  * - localStorage is STRICTLY PROHIBITED.
  * - Transient PKCE state is cleared immediately upon token exchange.
- * - Scopes and capabilities are NOT derived in the browser; loaded from GET /api/workspace/context.
+ * - The browser never grants capabilities; protected operations are authorized by the API.
  */
-
-import type { AuthenticatedApiRequestOptions } from '@ethio-tour/api-client';
-import * as apiClient from '@ethio-tour/api-client';
-
-export interface WorkspaceContextResponse {
-  actor: {
-    subjectId: string;
-    displayName?: string | null;
-  };
-  [key: string]: unknown;
-}
 
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
@@ -66,18 +55,6 @@ let inMemorySession: AuthenticatedUserSession | null = null;
 const remoteJwksByIssuer = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 export function getInMemorySession(): AuthenticatedUserSession | null {
-  if (
-    process.env.NODE_ENV !== 'production' &&
-    typeof window !== 'undefined' &&
-    (window as unknown as { __TEST_AUTH_SESSION__?: AuthenticatedUserSession })
-      .__TEST_AUTH_SESSION__
-  ) {
-    const testSession = (window as unknown as { __TEST_AUTH_SESSION__: AuthenticatedUserSession })
-      .__TEST_AUTH_SESSION__;
-    if (testSession.expiresAt > Date.now()) {
-      return testSession;
-    }
-  }
   if (inMemorySession && inMemorySession.expiresAt <= Date.now()) {
     inMemorySession = null;
   }
@@ -90,15 +67,6 @@ export function setInMemorySession(session: AuthenticatedUserSession | null): vo
 
 export function clearInMemorySession(): void {
   inMemorySession = null;
-  if (
-    process.env.NODE_ENV !== 'production' &&
-    typeof window !== 'undefined' &&
-    (window as unknown as { __TEST_AUTH_SESSION__?: AuthenticatedUserSession })
-      .__TEST_AUTH_SESSION__
-  ) {
-    delete (window as unknown as { __TEST_AUTH_SESSION__?: AuthenticatedUserSession })
-      .__TEST_AUTH_SESSION__;
-  }
 }
 
 // In-memory fallback for test environments without browser sessionStorage
@@ -391,31 +359,6 @@ export function createSessionFromTokenResponse(
   // Keep in memory only
   setInMemorySession(session);
   return session;
-}
-
-/**
- * Loads the server-provided workspace context using the in-memory access token.
- * Calls real GET /api/workspace/context endpoint.
- */
-export async function loadServerWorkspaceContext(
-  session: AuthenticatedUserSession | null,
-  options?: { apiBaseUrl?: string | undefined },
-): Promise<WorkspaceContextResponse> {
-  if (!session?.accessToken) {
-    throw new Error('Unauthorized: missing authenticated session');
-  }
-
-  const apiOptions: AuthenticatedApiRequestOptions = {
-    accessToken: session.accessToken,
-    ...(options?.apiBaseUrl ? { apiBaseUrl: options.apiBaseUrl } : {}),
-  };
-
-  const getCtx = (apiClient as Record<string, unknown>).getWorkspaceContext as ((opts: AuthenticatedApiRequestOptions) => Promise<WorkspaceContextResponse>) | undefined;
-  const context = getCtx ? await getCtx(apiOptions) : { actor: { subjectId: session.actorKey, displayName: session.displayName } };
-  if (context.actor.subjectId !== session.actorKey) {
-    throw new Error('The authenticated API actor does not match the verified identity.');
-  }
-  return context;
 }
 
 /**

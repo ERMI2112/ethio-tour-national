@@ -3,27 +3,36 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getAdmittedHotelWorkspace } from '@ethio-tour/api-client';
-import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../../components/hotel-pilot-ui';
+import {
+  HotelPilotFrame,
+  LoadingState,
+  SessionUnavailable,
+} from '../../../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../../../lib/hotel-pilot-session';
-import { describeApiFailure, type HotelApplicationResponse } from '../../../lib/hotel-pilot-ui-state';
+import {
+  describeApiFailure,
+  type HotelApplicationResponse,
+} from '../../../lib/hotel-pilot-ui-state';
 
 export default function AdmittedHotelWorkspacePage({
   params,
 }: Readonly<{
-  params: Promise<{ id: string }> | { id: string };
+  params: Promise<{ id: string }>;
 }>) {
-  const [applicationId, setApplicationId] = useState<string | null>(
-    'then' in params ? null : params.id,
-  );
+  const [applicationId, setApplicationId] = useState<string | null>(null);
   const { accessToken, signIn } = useHotelPilotSession();
   const [workspace, setWorkspace] = useState<HotelApplicationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if ('then' in params) {
-      void (params as Promise<{ id: string }>).then((resolved) => setApplicationId(resolved.id));
-    }
+    let active = true;
+    void params.then((resolved) => {
+      if (active) setApplicationId(resolved.id);
+    });
+    return () => {
+      active = false;
+    };
   }, [params]);
 
   const loadWorkspace = useCallback(async () => {
@@ -76,12 +85,14 @@ export default function AdmittedHotelWorkspacePage({
                 <span className="status status-neutral">Private Workspace</span>
               </div>
               <p className="notice">
-                Private workspace access only. No listing, booking, subscription, or payment is enabled.
+                Private workspace access only. No listing, booking, subscription, or payment is
+                enabled.
               </p>
               {workspace.content.applicantNotes && <p>{workspace.content.applicantNotes}</p>}
               <div className="decision-details">
                 <p>
-                  <strong>Administrator admission:</strong> {workspace.admissionStatus.replaceAll('_', ' ')}
+                  <strong>Administrator admission:</strong>{' '}
+                  {workspace.admissionStatus.replaceAll('_', ' ')}
                 </p>
                 {workspace.admissionDecision && (
                   <p>
@@ -90,7 +101,8 @@ export default function AdmittedHotelWorkspacePage({
                 )}
                 {workspace.bureauDecision && (
                   <p>
-                    <strong>Bureau review outcome:</strong> {workspace.bureauDecision.decision.replaceAll('_', ' ')} (
+                    <strong>Bureau review outcome:</strong>{' '}
+                    {workspace.bureauDecision.decision.replaceAll('_', ' ')} (
                     {workspace.bureauDecision.reason})
                   </p>
                 )}

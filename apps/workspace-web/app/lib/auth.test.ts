@@ -1,22 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from 'jose';
 
-const api = vi.hoisted(() => ({
-  getWorkspaceContext: vi.fn(),
-}));
-
-vi.mock('@ethio-tour/api-client', () => ({
-  ...api,
-  ApiClientError: class ApiClientError extends Error {
-    public constructor(
-      message: string,
-      public readonly status: number,
-    ) {
-      super(message);
-    }
-  },
-}));
-
 import {
   buildAuthorizationUrl,
   buildLogoutUrl,
@@ -26,7 +10,6 @@ import {
   generateCodeChallenge,
   generateRandomString,
   getInMemorySession,
-  loadServerWorkspaceContext,
   setInMemorySession,
   startKeycloakSignOut,
   type TokenResponse,
@@ -91,7 +74,7 @@ async function signedIdToken(): Promise<string> {
     .sign(privateKey);
 }
 
-describe('Keycloak OIDC PKCE, verified ID tokens, and server context', () => {
+describe('Keycloak OIDC PKCE and verified ID tokens', () => {
   const originalFetch = globalThis.fetch;
 
   beforeAll(async () => {
@@ -119,7 +102,6 @@ describe('Keycloak OIDC PKCE, verified ID tokens, and server context', () => {
     claimsForToken = {};
     signingKeyForToken = null;
     tokenStatus = 200;
-    api.getWorkspaceContext.mockReset();
     clearInMemorySession();
     mockFetch.mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -194,8 +176,7 @@ describe('Keycloak OIDC PKCE, verified ID tokens, and server context', () => {
     expect(getInMemorySession()).toEqual(session);
   });
 
-  it('does not trust or clear the injected test session in production mode', () => {
-    vi.stubEnv('NODE_ENV', 'production');
+  it('does not trust a session injected through a browser global', () => {
     const injectedSession = {
       actorKey: 'synthetic-test-only',
       displayName: 'Synthetic Test Session',
@@ -294,38 +275,6 @@ describe('Keycloak OIDC PKCE, verified ID tokens, and server context', () => {
     });
 
     expect(getInMemorySession()).toBeNull();
-  });
-
-  it('loads only the server-provided workspace context with the in-memory token', async () => {
-    const session = {
-      actorKey: 'synthetic-subject',
-      displayName: 'Synthetic Actor',
-      accessToken: 'synthetic-access-token',
-      expiresAt: Date.now() + 60_000,
-    };
-    const expectedContext = {
-      actor: { subjectId: 'synthetic-subject', displayName: 'Synthetic Actor' },
-      capabilities: [],
-      allowedScopes: [],
-      reviewQueue: [],
-    };
-    api.getWorkspaceContext.mockResolvedValueOnce(expectedContext);
-
-    await expect(loadServerWorkspaceContext(session)).resolves.toEqual(expectedContext);
-    expect(api.getWorkspaceContext).toHaveBeenCalledWith({
-      accessToken: 'synthetic-access-token',
-    });
-    api.getWorkspaceContext.mockResolvedValueOnce({
-      ...expectedContext,
-      actor: { subjectId: 'different-subject', displayName: 'Unexpected Actor' },
-    });
-    await expect(loadServerWorkspaceContext(session)).rejects.toThrow(
-      'does not match the verified identity',
-    );
-    await expect(loadServerWorkspaceContext(null)).rejects.toThrow(
-      'Unauthorized: missing authenticated session',
-    );
-    expect(api.getWorkspaceContext).toHaveBeenCalledTimes(2);
   });
 
   it('builds the Keycloak logout URL and clears transient values and in-memory tokens', () => {

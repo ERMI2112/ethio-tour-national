@@ -21,6 +21,7 @@ import {
 import { ApiClientError } from '@ethio-tour/api-client';
 
 const mockApiClient = vi.hoisted(() => ({
+  API_UNAUTHORIZED_EVENT: 'ethio-tour:unauthorized',
   getMyHotelApplications: vi.fn(),
   getHotelApplication: vi.fn(),
   createHotelApplication: vi.fn(),
@@ -206,10 +207,9 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
     fireEvent.click(viewWorkspaceButton);
 
     await waitFor(() => {
-      expect(mockApiClient.getAdmittedHotelWorkspace).toHaveBeenCalledWith(
-        admittedApp.id,
-        { accessToken: token },
-      );
+      expect(mockApiClient.getAdmittedHotelWorkspace).toHaveBeenCalledWith(admittedApp.id, {
+        accessToken: token,
+      });
     });
 
     await waitFor(() => {
@@ -262,10 +262,9 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
     );
 
     await waitFor(() => {
-      expect(mockApiClient.getAdmittedHotelWorkspace).toHaveBeenCalledWith(
-        admittedApp.id,
-        { accessToken: token },
-      );
+      expect(mockApiClient.getAdmittedHotelWorkspace).toHaveBeenCalledWith(admittedApp.id, {
+        accessToken: token,
+      });
     });
 
     await waitFor(() => {

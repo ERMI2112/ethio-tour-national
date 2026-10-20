@@ -10,6 +10,12 @@ import type { RegistryActor } from '../registry/registry-store';
 const databaseUrl = process.env.HOTEL_PILOT_TEST_DATABASE_URL;
 const disposableOptIn = process.env.HOTEL_PILOT_TEST_DISPOSABLE === 'true';
 const safeDatabase = isDedicatedLoopbackDatabase(databaseUrl) && disposableOptIn;
+const requiredRun = process.env.HOTEL_PILOT_TEST_REQUIRED === 'true';
+if (requiredRun && !safeDatabase) {
+  throw new Error(
+    'HOTEL_PILOT_TEST_REQUIRED=true requires HOTEL_PILOT_TEST_DISPOSABLE=true and a guarded disposable database URL.',
+  );
+}
 const suite = describe.skipIf(!safeDatabase);
 
 let client: postgres.Sql;

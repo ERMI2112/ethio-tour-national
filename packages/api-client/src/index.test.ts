@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  API_UNAUTHORIZED_EVENT,
   createDestination,
   createHotelApplication,
   decideHotelApplication,
@@ -102,6 +103,24 @@ describe('API client', () => {
       },
       body: JSON.stringify(request),
     });
+  });
+
+  it('signals session invalidation when the API rejects an expired bearer token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    const browserEvents = new EventTarget();
+    const listener = vi.fn();
+    browserEvents.addEventListener(API_UNAUTHORIZED_EVENT, listener);
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', browserEvents);
+
+    await expect(
+      getAdmittedHotelWorkspace('application-1', {
+        apiBaseUrl: 'http://api:4000/api',
+        accessToken: 'expired-token',
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it('sends Bureau decisions only to the case decision route', async () => {

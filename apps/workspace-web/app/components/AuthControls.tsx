@@ -8,22 +8,12 @@ export function AuthControls() {
   const auth = useOptionalAuth();
   const pilotSession = useHotelPilotSession();
 
-  const isLoading = auth?.isLoading ?? false;
   const isAuthenticated = auth?.isAuthenticated ?? pilotSession.isAuthenticated;
-  const displayName =
-    auth?.session?.displayName ??
-    pilotSession.displayName ??
-    (isAuthenticated ? 'Authenticated Participant' : undefined);
+  const displayName = auth?.session?.displayName ?? pilotSession.displayName;
   const signIn = auth?.signIn ?? pilotSession.signIn;
   const signOut = auth?.signOut ?? pilotSession.signOut;
 
-  if (isLoading) {
-    return (
-      <div style={{ fontSize: '0.8rem', color: 'var(--color-text-dim)' }}>Checking session...</div>
-    );
-  }
-
-  if (isAuthenticated && displayName) {
+  if (isAuthenticated) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <span
@@ -36,9 +26,9 @@ export function AuthControls() {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
           }}
-          title={displayName}
+          title={displayName ?? 'Signed in'}
         >
-          👤 {displayName}
+          👤 {displayName ?? 'Signed in'}
         </span>
         <button
           type="button"

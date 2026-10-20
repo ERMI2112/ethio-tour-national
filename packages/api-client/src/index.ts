@@ -41,6 +41,8 @@ export class ApiClientError extends Error {
   }
 }
 
+export const API_UNAUTHORIZED_EVENT = 'ethio-tour:unauthorized';
+
 export async function getApiHealth(
   apiBaseUrl = process.env.API_BASE_URL ?? 'http://localhost:4000/api',
 ): Promise<HealthResponse> {
@@ -251,6 +253,9 @@ async function apiRequest<T>(
   const response = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/${path}`, init);
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
+    }
     throw new ApiClientError('The API request failed', response.status);
   }
 
