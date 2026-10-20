@@ -3,7 +3,7 @@
 import { decideHotelAdmission, getHotelAdmissionQueue } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../components/hotel-pilot-ui';
-import { useHotelPilotAccessToken } from '../../lib/hotel-pilot-session';
+import { useHotelPilotSession } from '../../lib/hotel-pilot-session';
 import {
   canDecideHotelAdmission,
   describeApiFailure,
@@ -12,7 +12,7 @@ import {
 } from '../../lib/hotel-pilot-ui-state';
 
 export function AdminHotelAdmissionsScreen() {
-  const accessToken = useHotelPilotAccessToken();
+  const { accessToken, signIn } = useHotelPilotSession();
   const [applications, setApplications] = useState<HotelApplicationResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +55,7 @@ export function AdminHotelAdmissionsScreen() {
       description="Decide private EthioTour workspace access only, after a current Bureau approval."
     >
       {!accessToken ? (
-        <SessionUnavailable />
+        <SessionUnavailable onSignIn={signIn} />
       ) : (
         <section aria-labelledby="admission-queue-title">
           <div className="section-heading">

@@ -3,12 +3,14 @@
 import {
   createHotelApplication,
   createHotelApplicationRevision,
+  getAdmittedHotelWorkspace,
   getMyHotelApplications,
   submitHotelApplication,
 } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../components/hotel-pilot-ui';
-import { useHotelPilotAccessToken } from '../lib/hotel-pilot-session';
+import { useHotelPilotSession } from '../lib/hotel-pilot-session';
 import {
   applicationVersionLabel,
   canEditHotelApplication,
@@ -19,7 +21,7 @@ import {
 } from '../lib/hotel-pilot-ui-state';
 
 export function HotelApplicantScreen() {
-  const accessToken = useHotelPilotAccessToken();
+  const { accessToken, signIn } = useHotelPilotSession();
   const [applications, setApplications] = useState<HotelApplicationResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +118,7 @@ export function HotelApplicantScreen() {
       description="Create and track your own private application. Only the API determines ownership and access."
     >
       {!accessToken ? (
-        <SessionUnavailable />
+        <SessionUnavailable onSignIn={signIn} />
       ) : (
         <div className="card-stack">
           <section className="panel" aria-labelledby="create-hotel-application-title">
@@ -175,6 +177,7 @@ export function HotelApplicantScreen() {
                 <ApplicantApplicationCard
                   key={`${application.id}-${application.currentVersionId}`}
                   application={application}
+                  accessToken={accessToken}
                   onSubmit={() => submitDraft(application)}
                   onCreateCorrection={(content) => createCorrection(application, content)}
                 />
@@ -189,14 +192,20 @@ export function HotelApplicantScreen() {
 
 function ApplicantApplicationCard({
   application,
+  accessToken,
   onSubmit,
   onCreateCorrection,
 }: Readonly<{
   application: HotelApplicationResponse;
+  accessToken: string;
   onSubmit: () => Promise<void>;
   onCreateCorrection: (content: HotelApplicationContent) => Promise<void>;
 }>) {
   const [busy, setBusy] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [admittedWorkspace, setAdmittedWorkspace] = useState<HotelApplicationResponse | null>(null);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -214,6 +223,27 @@ function ApplicantApplicationCard({
     }
   }
 
+  async function handleToggleWorkspace() {
+    if (workspaceOpen) {
+      setWorkspaceOpen(false);
+      return;
+    }
+    setWorkspaceLoading(true);
+    setWorkspaceError(null);
+    try {
+      const data = await getAdmittedHotelWorkspace(application.id, { accessToken });
+      setAdmittedWorkspace(data);
+      setWorkspaceOpen(true);
+    } catch (requestError) {
+      setWorkspaceError(describeApiFailure(requestError, 'loading the admitted workspace'));
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }
+
+  const isAdmitted =
+    application.admissionStatus === 'admitted' || application.workspaceAccess === 'private_only';
+
   return (
     <article className="application-card" aria-labelledby={`application-${application.id}`}>
       <div className="card-topline">
@@ -227,11 +257,74 @@ function ApplicantApplicationCard({
       <p className="muted">
         Administrator admission: {application.admissionStatus.replaceAll('_', ' ')}
       </p>
-      {application.workspaceAccess === 'private_only' && (
-        <p className="notice">
-          Private workspace access only. No listing, booking, subscription, or payment is enabled.
-        </p>
+
+      {isAdmitted && (
+        <div className="workspace-access-panel" style={{ marginTop: '12px' }}>
+          <p className="notice">
+            Private workspace access only. No listing, booking, subscription, or payment is enabled.
+          </p>
+          <div className="action-row" style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={workspaceLoading}
+              onClick={() => void handleToggleWorkspace()}
+              aria-expanded={workspaceOpen}
+            >
+              {workspaceLoading
+                ? 'Loading admitted workspace…'
+                : workspaceOpen
+                ? 'Hide admitted workspace'
+                : 'View admitted workspace'}
+            </button>
+            <Link
+              href={`/hotels/workspace/${application.id}`}
+              className="secondary-button"
+              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+            >
+              Direct workspace link
+            </Link>
+          </div>
+          {workspaceError && (
+            <p className="error-message" role="alert" style={{ marginTop: '8px' }}>
+              {workspaceError}
+            </p>
+          )}
+          {workspaceOpen && admittedWorkspace && (
+            <div
+              className="decision-details admitted-workspace-content"
+              style={{ marginTop: '12px' }}
+              aria-label="Admitted hotel workspace details"
+            >
+              <h4>Confirmed Admitted Workspace</h4>
+              <p>
+                <strong>Claimed hotel:</strong> {admittedWorkspace.content.claimedHotelName}
+              </p>
+              <p>
+                <strong>Admitted version:</strong> {admittedWorkspace.currentVersion}
+              </p>
+              <p className="muted">
+                <strong>Workspace tier:</strong> {admittedWorkspace.workspaceAccess.replaceAll('_', ' ')} ·{' '}
+                <strong>Admission:</strong> {admittedWorkspace.admissionStatus.replaceAll('_', ' ')}
+              </p>
+              {admittedWorkspace.admissionDecision && (
+                <p>
+                  <strong>Administrator reason:</strong> {admittedWorkspace.admissionDecision.reason}
+                </p>
+              )}
+              {admittedWorkspace.bureauDecision && (
+                <p>
+                  <strong>Bureau review reason:</strong> {admittedWorkspace.bureauDecision.reason}
+                </p>
+              )}
+              <p className="notice" role="note" style={{ marginTop: '8px' }}>
+                {admittedWorkspace.notice}
+              </p>
+            </div>
+          )}
+        </div>
       )}
+
       {application.bureauDecision && (
         <div className="decision-details">
           <strong>

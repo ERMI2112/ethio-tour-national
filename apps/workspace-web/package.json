@@ -12,8 +12,14 @@
   },
   "dependencies": {
     "@ethio-tour/api-client": "workspace:*",
+    "@ethio-tour/contracts": "workspace:*",
+    "jose": "6.2.12",
     "next": "15.1.6",
     "react": "19.0.0",
     "react-dom": "19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.0",
+    "jsdom": "26.1.0"
   }
 }

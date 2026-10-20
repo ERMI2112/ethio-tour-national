@@ -3,7 +3,7 @@
 import { decideHotelApplication, getBureauHotelCases } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../components/hotel-pilot-ui';
-import { useHotelPilotAccessToken } from '../../lib/hotel-pilot-session';
+import { useHotelPilotSession } from '../../lib/hotel-pilot-session';
 import {
   canDecideBureauCase,
   describeApiFailure,
@@ -12,7 +12,7 @@ import {
 } from '../../lib/hotel-pilot-ui-state';
 
 export function BureauHotelCasesScreen() {
-  const accessToken = useHotelPilotAccessToken();
+  const { accessToken, signIn } = useHotelPilotSession();
   const [cases, setCases] = useState<HotelBureauCaseResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export function BureauHotelCasesScreen() {
       description="Review only the private cases returned for your server-assigned scope."
     >
       {!accessToken ? (
-        <SessionUnavailable />
+        <SessionUnavailable onSignIn={signIn} />
       ) : (
         <section aria-labelledby="bureau-queue-title">
           <div className="section-heading">
