@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import { schema } from './schema';
 
-describe('registry slice database schema', () => {
-  it('contains only the platform, scoped authorization, registry, audit and outbox tables', () => {
+describe('platform and synthetic hotel pilot database schema', () => {
+  it('adds private hotel onboarding history without replacing platform or registry tables', () => {
     expect(Object.keys(schema)).toEqual(
       expect.arrayContaining([
         'platformMetadata',
         'administrativeUnits',
         'administrativeUnitPaths',
         'organizations',
+        'hotelApplications',
+        'hotelApplicationVersions',
+        'hotelBureauCases',
+        'hotelBureauDecisions',
+        'hotelAdmissionDecisions',
         'userProfiles',
         'memberships',
         'accessGrants',
@@ -25,6 +30,6 @@ describe('registry slice database schema', () => {
         'notifications',
       ]),
     );
-    expect(Object.keys(schema)).toHaveLength(17);
+    expect(Object.keys(schema)).toHaveLength(22);
   });
 });

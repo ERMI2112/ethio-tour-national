@@ -89,3 +89,98 @@ export interface PublicAttraction {
 export interface PublicRegistryList<T> {
   items: T[];
 }
+
+export type HotelApplicationDecision = 'approve' | 'request_changes' | 'reject';
+export type HotelAdmissionDecision = 'admit' | 'decline';
+export const HOTEL_APPLICATION_STATUSES = [
+  'draft',
+  'submitted',
+  'changes_requested',
+  'approved',
+  'rejected',
+] as const;
+export type HotelApplicationStatus = (typeof HOTEL_APPLICATION_STATUSES)[number];
+export const HOTEL_BUREAU_CASE_STATUSES = [
+  'submitted',
+  'in_review',
+  'changes_requested',
+  'approved',
+  'rejected',
+] as const;
+export type HotelBureauCaseStatus = (typeof HOTEL_BUREAU_CASE_STATUSES)[number];
+export type HotelAdmissionStatus = 'not_eligible' | 'pending' | 'admitted' | 'declined';
+
+export interface HotelApplicationContent {
+  claimedHotelName: string;
+  applicantNotes: string;
+}
+
+export interface CreateHotelApplicationRequest {
+  content: HotelApplicationContent;
+}
+
+export interface UpdateHotelApplicationRequest {
+  expectedVersion: number;
+  content: HotelApplicationContent;
+}
+
+export interface SubmitHotelApplicationRequest {
+  expectedVersion: number;
+}
+
+export interface DecideHotelApplicationRequest {
+  expectedVersion: number;
+  decision: HotelApplicationDecision;
+  reason: string;
+}
+
+export interface DecideHotelAdmissionRequest {
+  expectedVersion: number;
+  decision: HotelAdmissionDecision;
+  reason: string;
+}
+
+export interface HotelBureauDecisionSummary {
+  decision: HotelApplicationDecision;
+  applicationVersion: number;
+  reason: string;
+  decidedAt: string;
+}
+
+export interface HotelAdmissionDecisionSummary {
+  decision: HotelAdmissionDecision;
+  applicationVersion: number;
+  reason: string;
+  decidedAt: string;
+}
+
+export interface HotelApplicationResponse {
+  id: string;
+  status: HotelApplicationStatus;
+  admissionStatus: HotelAdmissionStatus;
+  currentVersion: number;
+  currentVersionId: string | null;
+  content: HotelApplicationContent;
+  bureauDecision: HotelBureauDecisionSummary | null;
+  admissionDecision: HotelAdmissionDecisionSummary | null;
+  workspaceAccess: 'not_admitted' | 'private_only';
+  notice: 'Synthetic pilot review result; not a license or proof of authority to represent a hotel.';
+  version: number;
+}
+
+export interface HotelApplicationListResponse {
+  items: HotelApplicationResponse[];
+}
+
+export interface HotelBureauCaseResponse extends HotelApplicationResponse {
+  caseId: string;
+  caseStatus: HotelBureauCaseStatus;
+}
+
+export interface HotelBureauCaseListResponse {
+  items: HotelBureauCaseResponse[];
+}
+
+export interface HotelAdmissionQueueResponse {
+  items: HotelApplicationResponse[];
+}

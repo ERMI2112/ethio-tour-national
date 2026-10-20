@@ -10,7 +10,9 @@ export type DemoActorKey =
   | `woreda-gondar.${DemoRole}`
   | `woreda-lalibela.${DemoRole}`
   | `kebele-gondar.${DemoRole}`
-  | `kebele-lalibela.${DemoRole}`;
+  | `kebele-lalibela.${DemoRole}`
+  | 'hotel-bureau.reviewer'
+  | 'platform.hotel-admin';
 
 interface UnitDefinition {
   id: string;
@@ -21,11 +23,12 @@ interface UnitDefinition {
 
 interface ScopeDefinition {
   key: string;
-  unitId: string;
+  unitId: string | null;
   organizationId: string;
   organizationName: string;
-  level: UnitLevel;
+  level: UnitLevel | null;
   includeDescendants: boolean;
+  organizationType?: 'administrative' | 'platform';
 }
 
 const units: UnitDefinition[] = [
@@ -132,6 +135,27 @@ const scopes: ScopeDefinition[] = [
   },
 ];
 
+const hotelPilotScopes: ScopeDefinition[] = [
+  {
+    key: 'hotel-bureau',
+    unitId: 'demo-unit-federal',
+    organizationId: 'demo-org-hotel-bureau',
+    organizationName: 'Synthetic Hotel Pilot Bureau Review Organization',
+    level: 'federal',
+    includeDescendants: true,
+    organizationType: 'administrative',
+  },
+  {
+    key: 'platform',
+    unitId: null,
+    organizationId: 'demo-org-platform-admin',
+    organizationName: 'Synthetic EthioTour Platform Administration',
+    level: null,
+    includeDescendants: false,
+    organizationType: 'platform',
+  },
+];
+
 const capabilitiesByRole: Record<DemoRole, readonly string[]> = {
   editor: [
     'registry:resource:read',
@@ -148,9 +172,9 @@ const capabilitiesByRole: Record<DemoRole, readonly string[]> = {
 };
 
 const demoRoles: readonly DemoRole[] = ['editor', 'reviewer', 'publisher'];
-export const demoActorKeys: readonly DemoActorKey[] = scopes.flatMap((scope) =>
-  demoRoles.map((role) => `${scope.key}.${role}` as DemoActorKey),
-);
+export const demoActorKeys: readonly DemoActorKey[] = scopes
+  .flatMap((scope) => demoRoles.map((role) => `${scope.key}.${role}` as DemoActorKey))
+  .concat(['hotel-bureau.reviewer', 'platform.hotel-admin']);
 
 export async function seedSyntheticRegistryDemo(
   client: DatabaseClient,
@@ -210,22 +234,29 @@ export async function seedSyntheticRegistryDemo(
       }
     }
 
-    for (const scope of scopes) {
+    for (const scope of [...scopes, ...hotelPilotScopes]) {
       await transaction.unsafe(
         `
-          INSERT INTO organizations (id, display_name, level, administrative_unit_id, is_synthetic)
-          VALUES ($1, $2, $3, $4, true)
+          INSERT INTO organizations (id, display_name, organization_type, level, administrative_unit_id, is_synthetic)
+          VALUES ($1, $2, $3, $4, $5, true)
           ON CONFLICT (id) DO NOTHING
         `,
-        [scope.organizationId, scope.organizationName, scope.level, scope.unitId],
+        [
+          scope.organizationId,
+          scope.organizationName,
+          scope.organizationType ?? 'administrative',
+          scope.level,
+          scope.unitId,
+        ],
       );
       const [existing] = await transaction.unsafe<Record<string, unknown>[]>(
-        'SELECT display_name, level, administrative_unit_id, is_synthetic FROM organizations WHERE id = $1',
+        'SELECT display_name, organization_type, level, administrative_unit_id, is_synthetic FROM organizations WHERE id = $1',
         [scope.organizationId],
       );
       if (
         existing?.display_name !== scope.organizationName ||
-        existing.level !== scope.level ||
+        existing.organization_type !== (scope.organizationType ?? 'administrative') ||
+        nullableString(existing.level) !== scope.level ||
         existing.administrative_unit_id !== scope.unitId ||
         existing.is_synthetic !== true
       ) {
@@ -234,9 +265,21 @@ export async function seedSyntheticRegistryDemo(
     }
 
     for (const [actorKey, subjectId] of assignedActors) {
-      const [scopeKey, role] = actorKey.split('.') as [string, DemoRole];
-      const scope = scopes.find((candidate) => candidate.key === scopeKey);
+      const [scopeKey, roleValue] = actorKey.split('.') as [string, string];
+      const scope = [...scopes, ...hotelPilotScopes].find(
+        (candidate) => candidate.key === scopeKey,
+      );
       if (!scope) throw new Error('A demo actor assignment is not recognized.');
+      const isHotelBureauReviewer = actorKey === 'hotel-bureau.reviewer';
+      const isHotelAdministrator = actorKey === 'platform.hotel-admin';
+      if (
+        !isHotelBureauReviewer &&
+        !isHotelAdministrator &&
+        !demoRoles.includes(roleValue as DemoRole)
+      ) {
+        throw new Error('A demo actor role is not recognized.');
+      }
+      const role = roleValue as DemoRole;
       const [profile] = await transaction.unsafe<Record<string, unknown>[]>(
         `
           INSERT INTO user_profiles (external_issuer, external_subject_id)
@@ -273,7 +316,12 @@ export async function seedSyntheticRegistryDemo(
       if (!existingMembership?.id) throw new Error('A demo membership could not be resolved.');
       const membershipId = stringValue(existingMembership.id);
 
-      for (const capability of capabilitiesByRole[role]) {
+      const capabilities = isHotelBureauReviewer
+        ? ['hotel:application:bureau:read', 'hotel:application:bureau:decide']
+        : isHotelAdministrator
+          ? ['hotel:application:admin:read', 'hotel:application:admin:decide']
+          : capabilitiesByRole[role];
+      for (const capability of capabilities) {
         const [grant] = await transaction.unsafe<Record<string, unknown>[]>(
           `
             INSERT INTO access_grants (
@@ -298,25 +346,32 @@ export async function seedSyntheticRegistryDemo(
           throw new Error('A demo authorization grant conflicts with existing data.');
         }
         const grantId = stringValue(existingGrant.id);
-        const [unexpectedScope] = await transaction.unsafe<Record<string, unknown>[]>(
-          'SELECT 1 FROM grant_scopes WHERE grant_id = $1 AND administrative_unit_id <> $2 LIMIT 1',
-          [grantId, scope.unitId],
-        );
+        const [unexpectedScope] = scope.unitId
+          ? await transaction.unsafe<Record<string, unknown>[]>(
+              'SELECT 1 FROM grant_scopes WHERE grant_id = $1 AND administrative_unit_id <> $2 LIMIT 1',
+              [grantId, scope.unitId],
+            )
+          : await transaction.unsafe<Record<string, unknown>[]>(
+              'SELECT 1 FROM grant_scopes WHERE grant_id = $1 LIMIT 1',
+              [grantId],
+            );
         if (unexpectedScope) throw new Error('A demo grant has an unexpected geographic scope.');
-        await transaction.unsafe(
-          `
-            INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (grant_id, administrative_unit_id) DO NOTHING
-          `,
-          [grantId, scope.unitId, scope.includeDescendants],
-        );
-        const [savedScope] = await transaction.unsafe<Record<string, unknown>[]>(
-          'SELECT include_descendants FROM grant_scopes WHERE grant_id = $1 AND administrative_unit_id = $2',
-          [grantId, scope.unitId],
-        );
-        if (savedScope?.include_descendants !== scope.includeDescendants) {
-          throw new Error('A demo grant scope conflicts with existing data.');
+        if (scope.unitId) {
+          await transaction.unsafe(
+            `
+              INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants)
+              VALUES ($1, $2, $3)
+              ON CONFLICT (grant_id, administrative_unit_id) DO NOTHING
+            `,
+            [grantId, scope.unitId, scope.includeDescendants],
+          );
+          const [savedScope] = await transaction.unsafe<Record<string, unknown>[]>(
+            'SELECT include_descendants FROM grant_scopes WHERE grant_id = $1 AND administrative_unit_id = $2',
+            [grantId, scope.unitId],
+          );
+          if (savedScope?.include_descendants !== scope.includeDescendants) {
+            throw new Error('A demo grant scope conflicts with existing data.');
+          }
         }
       }
     }
@@ -337,6 +392,13 @@ function validateActorAssignments(assignments: readonly [DemoActorKey, string][]
     }
     subjects.add(subjectId);
     subjectsByScope.set(scopeKey, subjects);
+  }
+  const bureauReviewer = assignments.find(([key]) => key === 'hotel-bureau.reviewer')?.[1];
+  const platformAdmin = assignments.find(([key]) => key === 'platform.hotel-admin')?.[1];
+  if (bureauReviewer && platformAdmin && bureauReviewer === platformAdmin) {
+    throw new Error(
+      'The synthetic Bureau reviewer and platform Administrator must be distinct actors.',
+    );
   }
 }
 

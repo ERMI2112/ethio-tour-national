@@ -1,0 +1,294 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #1c2925;
+  background: #f4f7f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+a {
+  color: #145b49;
+  text-underline-offset: 0.18em;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #bf5a24;
+  outline-offset: 2px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  min-height: 42px;
+  border: 1px solid #145b49;
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+  color: #fff;
+  background: #145b49;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #0e4638;
+}
+
+button:disabled {
+  border-color: #aebbb5;
+  color: #52615a;
+  background: #e6ece8;
+  cursor: not-allowed;
+}
+
+main {
+  min-height: 100vh;
+}
+
+.workspace-shell {
+  width: min(100% - 2rem, 920px);
+  margin-inline: auto;
+  padding-block: 2rem 4rem;
+}
+
+.page-heading {
+  margin-bottom: 1.5rem;
+}
+
+.page-heading h1,
+.section-heading h2,
+.application-card h3 {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.page-heading h1 {
+  font-size: 2rem;
+}
+
+.page-heading > p:last-child {
+  margin-bottom: 0;
+  color: #52615a;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  color: #53665d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.panel,
+.application-card,
+.session-panel {
+  border: 1px solid #d2ddd7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.panel,
+.session-panel {
+  padding: 1.25rem;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.section-heading h2 {
+  font-size: 1.35rem;
+}
+
+.workflow-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1.25rem;
+}
+
+.status,
+.status-neutral {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 4px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.status-neutral {
+  color: #344a40;
+  background: #edf2ee;
+}
+
+.api-health {
+  margin-top: 1rem;
+  color: #52615a;
+  font-size: 0.9rem;
+}
+
+.session-panel {
+  border-left: 4px solid #bf5a24;
+}
+
+.session-panel h2 {
+  margin-top: 0;
+  font-size: 1.15rem;
+}
+
+.form-stack,
+.card-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.form-stack {
+  max-width: 680px;
+}
+
+.form-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.form-field label {
+  font-weight: 700;
+}
+
+.form-field input,
+.form-field textarea,
+.form-field select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #788a80;
+  border-radius: 5px;
+  padding: 0.65rem 0.7rem;
+  color: #1c2925;
+  background: #fff;
+}
+
+.form-field textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.application-card {
+  padding: 1rem;
+}
+
+.application-card h3 {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.application-card p {
+  overflow-wrap: anywhere;
+}
+
+.card-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.decision-details {
+  border-top: 1px solid #e0e7e3;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.notice,
+.error-message,
+.success-message,
+.empty-state {
+  border-radius: 5px;
+  padding: 0.75rem 0.9rem;
+}
+
+.notice,
+.empty-state {
+  color: #344a40;
+  background: #edf2ee;
+}
+
+.error-message {
+  border: 1px solid #b42318;
+  color: #8c1d16;
+  background: #fff1ef;
+}
+
+.success-message {
+  border: 1px solid #31705b;
+  color: #164b3a;
+  background: #edf7f1;
+}
+
+.muted {
+  color: #52615a;
+}
+
+.api-health,
+.application-card p,
+.panel p,
+.session-panel p {
+  line-height: 1.55;
+}
+
+@media (max-width: 560px) {
+  .workspace-shell {
+    width: min(100% - 1.25rem, 920px);
+    padding-top: 1.25rem;
+  }
+
+  .section-heading {
+    display: grid;
+  }
+
+  .page-heading h1 {
+    font-size: 1.7rem;
+  }
+
+  .panel,
+  .session-panel {
+    padding: 1rem;
+  }
+
+  .workflow-links {
+    display: grid;
+    gap: 0.7rem;
+  }
+}

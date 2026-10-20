@@ -10,6 +10,12 @@ export type BackendServiceName = 'api' | 'worker';
 export { RegistryError, RegistryService } from './registry/registry-service';
 export { OutboxNotificationDispatcher } from './registry/outbox-dispatcher';
 export { PostgresRegistryStore } from './registry/postgres-registry-store';
+export {
+  HotelOnboardingError,
+  HotelOnboardingService,
+  hotelPilotSettings,
+} from './hotels/hotel-onboarding-service';
+export { PostgresHotelOnboardingStore } from './hotels/postgres-hotel-onboarding-store';
 export type {
   AuditRecord,
   OutboxRecord,
@@ -23,6 +29,15 @@ export type {
   SubmissionRecord,
   UnitScope,
 } from './registry/registry-store';
+export type {
+  HotelBureauRoute,
+  HotelBureauRouteResolution,
+  HotelBureauRoutingPolicy,
+  HotelDecisionTarget,
+  HotelOnboardingStore,
+  HotelOnboardingTransaction,
+  HotelPilotSettings,
+} from './hotels/hotel-onboarding-store';
 
 export interface BackendRuntime {
   serviceName: BackendServiceName;

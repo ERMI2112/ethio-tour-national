@@ -7,6 +7,7 @@ import type {
 import type { DatabaseClient } from '@ethio-tour/db';
 import type postgres from 'postgres';
 
+import { RegistryError } from './registry-service';
 import type {
   AuditRecord,
   OutboxRecord,
@@ -144,6 +145,22 @@ class PostgresRegistryTransaction implements RegistryTransaction {
   constructor(private readonly sql: DatabaseTransaction) {}
 
   async getAuthorizationContext(actor: RegistryActor): Promise<AuthorizationContext> {
+    const aliases = [
+      ...new Set((actor.issuerAliases ?? []).filter((issuer) => issuer !== actor.issuer)),
+    ];
+    if (aliases.length > 0) {
+      const [collision] = await this.sql.unsafe<Row[]>(
+        `SELECT id FROM user_profiles
+         WHERE external_subject_id = $1 AND external_issuer = ANY($2::text[]) LIMIT 1`,
+        [actor.subjectId, aliases],
+      );
+      if (collision) {
+        throw new RegistryError(
+          'conflict',
+          'Identity issuer alias collides with an existing profile; ownership was not changed.',
+        );
+      }
+    }
     const rows = await this.sql.unsafe<Row[]>(
       `
         SELECT profile.active AS profile_active,

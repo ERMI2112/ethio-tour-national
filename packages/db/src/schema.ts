@@ -65,17 +65,187 @@ export const organizations = pgTable(
   {
     id: text('id').primaryKey(),
     displayName: text('display_name').notNull(),
-    level: text('level').notNull(),
+    organizationType: text('organization_type').default('administrative').notNull(),
+    level: text('level'),
     administrativeUnitId: text('administrative_unit_id').references(() => administrativeUnits.id),
     isSynthetic: boolean('is_synthetic').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     check(
-      'organizations_level_check',
-      sql`${table.level} in ('federal', 'regional', 'woreda', 'kebele')`,
+      'organizations_type_level_check',
+      sql`(${table.organizationType} = 'administrative' and ${table.level} in ('federal', 'regional', 'woreda', 'kebele')) or (${table.organizationType} in ('platform', 'provider') and ${table.level} is null and ${table.administrativeUnitId} is null)`,
     ),
     index('organizations_unit_idx').on(table.administrativeUnitId),
+  ],
+);
+
+export const hotelApplications = pgTable(
+  'hotel_applications',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    applicantProfileId: uuid('applicant_profile_id')
+      .notNull()
+      .references(() => userProfiles.id),
+    draftContent: jsonb('draft_content')
+      .$type<{ claimedHotelName: string; applicantNotes: string }>()
+      .notNull(),
+    status: text('status').default('draft').notNull(),
+    admissionStatus: text('admission_status').default('not_eligible').notNull(),
+    isSynthetic: boolean('is_synthetic').default(true).notNull(),
+    currentVersionNumber: integer('current_version_number').default(0).notNull(),
+    currentSubmittedVersionId: uuid('current_submitted_version_id').references(
+      (): AnyPgColumn => hotelApplicationVersions.id,
+    ),
+    providerOrganizationId: text('provider_organization_id').references(() => organizations.id),
+    version: integer('version').default(1).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('hotel_applications_provider_org_uq').on(table.providerOrganizationId),
+    check(
+      'hotel_applications_status_check',
+      sql`${table.status} in ('draft', 'submitted', 'changes_requested', 'approved', 'rejected')`,
+    ),
+    check(
+      'hotel_applications_admission_status_check',
+      sql`${table.admissionStatus} in ('not_eligible', 'pending', 'admitted', 'declined')`,
+    ),
+    check(
+      'hotel_applications_version_check',
+      sql`${table.currentVersionNumber} >= 0 and ${table.version} > 0`,
+    ),
+    check('hotel_applications_synthetic_check', sql`${table.isSynthetic} = true`),
+    index('hotel_applications_owner_idx').on(table.applicantProfileId, table.updatedAt),
+    index('hotel_applications_status_idx').on(table.status, table.admissionStatus),
+  ],
+);
+
+export const hotelApplicationVersions = pgTable(
+  'hotel_application_versions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => hotelApplications.id),
+    versionNumber: integer('version_number').notNull(),
+    content: jsonb('content')
+      .$type<{ claimedHotelName: string; applicantNotes: string }>()
+      .notNull(),
+    submittedByProfileId: uuid('submitted_by_profile_id')
+      .notNull()
+      .references(() => userProfiles.id),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('hotel_application_versions_app_number_uq').on(
+      table.applicationId,
+      table.versionNumber,
+    ),
+    uniqueIndex('hotel_application_versions_app_id_uq').on(table.applicationId, table.id),
+    check('hotel_application_versions_number_check', sql`${table.versionNumber} > 0`),
+    index('hotel_application_versions_submitted_idx').on(table.submittedAt),
+  ],
+);
+
+export const hotelBureauCases = pgTable(
+  'hotel_bureau_cases',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    applicationId: uuid('application_id').notNull(),
+    applicationVersionId: uuid('application_version_id').notNull(),
+    bureauOrganizationId: text('bureau_organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    scopeUnitId: text('scope_unit_id')
+      .notNull()
+      .references(() => administrativeUnits.id),
+    status: text('status').default('in_review').notNull(),
+    version: integer('version').default(1).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.applicationId, table.applicationVersionId],
+      foreignColumns: [hotelApplicationVersions.applicationId, hotelApplicationVersions.id],
+      name: 'hotel_bureau_cases_version_fk',
+    }),
+    uniqueIndex('hotel_bureau_cases_version_uq').on(table.applicationVersionId),
+    check(
+      'hotel_bureau_cases_status_check',
+      sql`${table.status} in ('submitted', 'in_review', 'approved', 'changes_requested', 'rejected')`,
+    ),
+    check('hotel_bureau_cases_version_check', sql`${table.version} > 0`),
+    index('hotel_bureau_cases_queue_idx').on(
+      table.bureauOrganizationId,
+      table.scopeUnitId,
+      table.status,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const hotelBureauDecisions = pgTable(
+  'hotel_bureau_decisions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => hotelBureauCases.id),
+    applicationVersionId: uuid('application_version_id')
+      .notNull()
+      .references(() => hotelApplicationVersions.id),
+    reviewerProfileId: uuid('reviewer_profile_id')
+      .notNull()
+      .references(() => userProfiles.id),
+    reviewerMembershipId: uuid('reviewer_membership_id')
+      .notNull()
+      .references(() => memberships.id),
+    decision: text('decision').notNull(),
+    reason: text('reason').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('hotel_bureau_decisions_case_uq').on(table.caseId),
+    check(
+      'hotel_bureau_decisions_decision_check',
+      sql`${table.decision} in ('approve', 'request_changes', 'reject')`,
+    ),
+    index('hotel_bureau_decisions_version_idx').on(table.applicationVersionId),
+  ],
+);
+
+export const hotelAdmissionDecisions = pgTable(
+  'hotel_admission_decisions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => hotelApplications.id),
+    applicationVersionId: uuid('application_version_id')
+      .notNull()
+      .references(() => hotelApplicationVersions.id),
+    administratorProfileId: uuid('administrator_profile_id')
+      .notNull()
+      .references(() => userProfiles.id),
+    administratorMembershipId: uuid('administrator_membership_id')
+      .notNull()
+      .references(() => memberships.id),
+    decision: text('decision').notNull(),
+    reason: text('reason').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('hotel_admission_decisions_app_version_uq').on(
+      table.applicationId,
+      table.applicationVersionId,
+    ),
+    check(
+      'hotel_admission_decisions_decision_check',
+      sql`${table.decision} in ('admit', 'decline')`,
+    ),
+    index('hotel_admission_decisions_created_idx').on(table.createdAt),
   ],
 );
 
@@ -140,7 +310,7 @@ export const accessGrants = pgTable(
     ),
     check(
       'access_grants_capability_check',
-      sql`${table.capability} in ('registry:resource:read', 'registry:resource:create', 'registry:resource:edit', 'registry:submission:submit', 'registry:submission:review', 'registry:publication:publish', 'registry:publication:withdraw')`,
+      sql`${table.capability} in ('registry:resource:read', 'registry:resource:create', 'registry:resource:edit', 'registry:submission:submit', 'registry:submission:review', 'registry:publication:publish', 'registry:publication:withdraw', 'hotel:application:bureau:read', 'hotel:application:bureau:decide', 'hotel:application:admin:read', 'hotel:application:admin:decide', 'hotel:workspace:read', 'hotel:workspace:edit')`,
     ),
     uniqueIndex('access_grants_membership_capability_organization_uq').on(
       table.membershipId,
@@ -416,6 +586,11 @@ export const schema = {
   administrativeUnits,
   administrativeUnitPaths,
   organizations,
+  hotelApplications,
+  hotelApplicationVersions,
+  hotelBureauCases,
+  hotelBureauDecisions,
+  hotelAdmissionDecisions,
   userProfiles,
   memberships,
   accessGrants,

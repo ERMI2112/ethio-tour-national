@@ -15,9 +15,11 @@ describe('synthetic registry role map', () => {
     ];
     const roles = ['editor', 'reviewer', 'publisher'];
 
-    expect(demoActorKeys).toHaveLength(scopes.length * roles.length);
+    expect(demoActorKeys).toHaveLength(scopes.length * roles.length + 2);
     for (const scope of scopes) {
       for (const role of roles) expect(demoActorKeys).toContain(`${scope}.${role}`);
     }
+    expect(demoActorKeys).toContain('hotel-bureau.reviewer');
+    expect(demoActorKeys).toContain('platform.hotel-admin');
   });
 });

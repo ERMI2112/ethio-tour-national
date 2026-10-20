@@ -1,5 +1,11 @@
 export type Capability =
   | 'platform:health:read'
+  | 'hotel:application:bureau:read'
+  | 'hotel:application:bureau:decide'
+  | 'hotel:application:admin:read'
+  | 'hotel:application:admin:decide'
+  | 'hotel:workspace:read'
+  | 'hotel:workspace:edit'
   | 'registry:resource:read'
   | 'registry:resource:create'
   | 'registry:resource:edit'
@@ -66,9 +72,20 @@ export type PolicyDecision =
   | { allowed: false; reason: DenialReason };
 
 const decisionCapabilities = new Set<Capability>([
+  'hotel:application:bureau:decide',
+  'hotel:application:admin:decide',
   'registry:submission:review',
   'registry:publication:publish',
   'registry:publication:withdraw',
+]);
+
+const syntheticHotelCapabilities = new Set<Capability>([
+  'hotel:application:bureau:read',
+  'hotel:application:bureau:decide',
+  'hotel:application:admin:read',
+  'hotel:application:admin:decide',
+  'hotel:workspace:read',
+  'hotel:workspace:edit',
 ]);
 
 export function authorize(
@@ -123,7 +140,10 @@ export function authorize(
       continue;
     }
 
-    if (grant.demoOnly && requirement.resourceIsSynthetic !== true) {
+    if (
+      (grant.demoOnly && requirement.resourceIsSynthetic !== true) ||
+      (syntheticHotelCapabilities.has(requirement.capability) && !grant.demoOnly)
+    ) {
       sawNonSyntheticResource = true;
       continue;
     }

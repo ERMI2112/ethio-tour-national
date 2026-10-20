@@ -2,7 +2,14 @@ import type {
   CreateAttractionRequest,
   CreateDestinationRequest,
   CreateRevisionRequest,
+  CreateHotelApplicationRequest,
+  DecideHotelAdmissionRequest,
+  DecideHotelApplicationRequest,
   HealthResponse,
+  HotelAdmissionQueueResponse,
+  HotelApplicationListResponse,
+  HotelApplicationResponse,
+  HotelBureauCaseListResponse,
   PrivateRegistryResourceResponse,
   PublicAttraction,
   PublicDestination,
@@ -10,6 +17,8 @@ import type {
   PublishRevisionRequest,
   ReviewRevisionRequest,
   SubmitRevisionRequest,
+  SubmitHotelApplicationRequest,
+  UpdateHotelApplicationRequest,
   WithdrawPublicationRequest,
 } from '@ethio-tour/contracts';
 
@@ -129,6 +138,97 @@ export function withdrawRegistryPublication(
 ): Promise<PrivateRegistryResourceResponse> {
   return apiRequest(
     `registry/${encodeURIComponent(resourceId)}/withdraw`,
+    'POST',
+    options,
+    request,
+  );
+}
+
+export function createHotelApplication(
+  request: CreateHotelApplicationRequest,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest('hotels/applications', 'POST', options, request);
+}
+
+export function getMyHotelApplications(
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationListResponse> {
+  return apiRequest('hotels/applications', 'GET', options);
+}
+
+export function getMyHotelApplication(
+  applicationId: string,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest(`hotels/applications/${encodeURIComponent(applicationId)}`, 'GET', options);
+}
+
+export function getAdmittedHotelWorkspace(
+  applicationId: string,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest(`hotels/workspace/${encodeURIComponent(applicationId)}`, 'GET', options);
+}
+
+export function createHotelApplicationRevision(
+  applicationId: string,
+  request: UpdateHotelApplicationRequest,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest(
+    `hotels/applications/${encodeURIComponent(applicationId)}/revisions`,
+    'POST',
+    options,
+    request,
+  );
+}
+
+export function submitHotelApplication(
+  applicationId: string,
+  request: SubmitHotelApplicationRequest,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest(
+    `hotels/applications/${encodeURIComponent(applicationId)}/submit`,
+    'POST',
+    options,
+    request,
+  );
+}
+
+export function getBureauHotelCases(
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelBureauCaseListResponse> {
+  return apiRequest('bureau/hotel-cases', 'GET', options);
+}
+
+export function decideHotelApplication(
+  caseId: string,
+  request: DecideHotelApplicationRequest,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest(
+    `bureau/hotel-cases/${encodeURIComponent(caseId)}/decision`,
+    'POST',
+    options,
+    request,
+  );
+}
+
+export function getHotelAdmissionQueue(
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelAdmissionQueueResponse> {
+  return apiRequest('admin/hotel-admissions', 'GET', options);
+}
+
+export function decideHotelAdmission(
+  applicationId: string,
+  request: DecideHotelAdmissionRequest,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelApplicationResponse> {
+  return apiRequest(
+    `admin/hotel-admissions/${encodeURIComponent(applicationId)}/decision`,
     'POST',
     options,
     request,

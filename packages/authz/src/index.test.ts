@@ -173,3 +173,46 @@ describe('registry authorization', () => {
     ).toEqual({ allowed: false, reason: 'non-synthetic-resource' });
   });
 });
+
+describe('synthetic hotel authorization', () => {
+  it('requires Bureau decision capability and the assigned scope on the same grant', () => {
+    const decision = authorize(
+      context([
+        grant('hotel:application:bureau:decide', {
+          scopes: [{ administrativeUnitId: 'unit-lalibela', includeDescendants: false }],
+        }),
+        grant('hotel:application:bureau:read', {
+          id: 'grant-bureau-scope',
+          scopes: [{ administrativeUnitId: 'unit-gondar', includeDescendants: false }],
+        }),
+      ]),
+      {
+        capability: 'hotel:application:bureau:decide',
+        organizationId: 'org-gondar',
+        administrativeUnitId: 'unit-gondar',
+        resourceIsSynthetic: true,
+      },
+    );
+
+    expect(decision).toEqual({ allowed: false, reason: 'missing-scope' });
+  });
+
+  it('keeps Bureau decision grants disabled for production decisions', () => {
+    const decision = authorize(
+      context([
+        grant('hotel:application:bureau:decide', {
+          demoOnly: false,
+          productionDecisionEnabled: true,
+        }),
+      ]),
+      {
+        capability: 'hotel:application:bureau:decide',
+        organizationId: 'org-gondar',
+        administrativeUnitId: 'unit-gondar',
+        resourceIsSynthetic: true,
+      },
+    );
+
+    expect(decision).toEqual({ allowed: false, reason: 'production-decision-disabled' });
+  });
+});

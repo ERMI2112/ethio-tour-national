@@ -4,6 +4,7 @@ import type { EditorialContent, RegistryResourceKind, ReviewDecision } from '@et
 export interface RegistryActor {
   issuer: string;
   subjectId: string;
+  issuerAliases?: readonly string[];
 }
 
 export interface UnitScope {
