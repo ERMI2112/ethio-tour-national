@@ -10,6 +10,7 @@
     "build": "pnpm -r --if-present build",
     "db:generate": "pnpm --filter @ethio-tour/db db:generate",
     "db:migrate": "pnpm --filter @ethio-tour/db db:migrate",
+    "db:migrate:hotel-test": "pnpm --filter @ethio-tour/db db:migrate:disposable",
     "db:seed:demo": "pnpm --filter @ethio-tour/db db:seed:demo",
     "dev": "pnpm --parallel --filter @ethio-tour/api --filter @ethio-tour/worker --filter @ethio-tour/public-web --filter @ethio-tour/workspace-web dev",
     "format": "prettier --write .",
@@ -17,6 +18,8 @@
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm build && pnpm -r --if-present test",
     "test:e2e:hotel": "playwright test --config=playwright.hotel.config.ts",
+    "test:hotel:integration": "pnpm --filter @ethio-tour/backend-domain test:hotel:integration",
+    "test:hotel:migration": "pnpm --filter @ethio-tour/db test:hotel:migration",
     "typecheck": "pnpm build && pnpm -r --if-present typecheck"
   },
   "devDependencies": {

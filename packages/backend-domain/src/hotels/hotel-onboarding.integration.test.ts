@@ -2,14 +2,17 @@ import { randomUUID } from 'node:crypto';
 
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isDisposableHotelTestDatabase } from '@ethio-tour/db/testing/disposable-database-target';
 
 import { HotelOnboardingService } from './hotel-onboarding-service';
 import { PostgresHotelOnboardingStore } from './postgres-hotel-onboarding-store';
 import type { RegistryActor } from '../registry/registry-store';
 
 const databaseUrl = process.env.HOTEL_PILOT_TEST_DATABASE_URL;
-const disposableOptIn = process.env.HOTEL_PILOT_TEST_DISPOSABLE === 'true';
-const safeDatabase = isDedicatedLoopbackDatabase(databaseUrl) && disposableOptIn;
+const safeDatabase = isDisposableHotelTestDatabase(
+  databaseUrl,
+  process.env.HOTEL_PILOT_TEST_DISPOSABLE,
+);
 const requiredRun = process.env.HOTEL_PILOT_TEST_REQUIRED === 'true';
 if (requiredRun && !safeDatabase) {
   throw new Error(
@@ -444,12 +447,12 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     });
     const [triggerName] = [`hotel_pilot_fail_membership_${randomUUID().replaceAll('-', '')}`];
     const functionName = `${triggerName}_fn`;
-    await client.unsafe(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.organization_id LIKE 'hotel-provider-%' THEN RAISE EXCEPTION 'pilot rollback probe'; END IF; RETURN NEW; END $$`);
-    await client.unsafe(
-      `CREATE TRIGGER ${triggerName} BEFORE INSERT ON memberships FOR EACH ROW EXECUTE FUNCTION ${functionName}()`,
-    );
     try {
+      await client.unsafe(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.organization_id LIKE 'hotel-provider-%' THEN RAISE EXCEPTION 'pilot rollback probe'; END IF; RETURN NEW; END $$`);
+      await client.unsafe(
+        `CREATE TRIGGER ${triggerName} BEFORE INSERT ON memberships FOR EACH ROW EXECUTE FUNCTION ${functionName}()`,
+      );
       await expect(
         service.decideAdmission(fixture.administrator, created.id, {
           expectedVersion: approved.version,
@@ -458,8 +461,8 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
         }),
       ).rejects.toThrow('pilot rollback probe');
     } finally {
-      await client.unsafe(`DROP TRIGGER ${triggerName} ON memberships`);
-      await client.unsafe(`DROP FUNCTION ${functionName}()`);
+      await client.unsafe(`DROP TRIGGER IF EXISTS ${triggerName} ON memberships`);
+      await client.unsafe(`DROP FUNCTION IF EXISTS ${functionName}()`);
     }
     const [state] = await client.unsafe<
       { decision_count: number; provider_count: number; admission_audit_count: number }[]
@@ -508,22 +511,6 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     ).rejects.toThrow('hotel application history is immutable');
   });
 });
-
-function isDedicatedLoopbackDatabase(value: string | undefined): boolean {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    const databaseName = decodeURIComponent(url.pathname.slice(1));
-    return (
-      ['localhost', '127.0.0.1', '::1'].includes(url.hostname) &&
-      url.port !== '56320' &&
-      Number(url.port) >= 50000 &&
-      databaseName.startsWith('ethio_tour_hotel_test_')
-    );
-  } catch {
-    return false;
-  }
-}
 
 async function seedFixture(
   options: { applicantCanReview?: boolean; secondReviewer?: boolean } = {},

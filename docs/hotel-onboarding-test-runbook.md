@@ -1,35 +1,100 @@
-# Hotel Onboarding Backend Test Runbook
+# Hotel Onboarding Acceptance-Test Runbook
 
-This runbook is for a separately provisioned, disposable local test database. It is not production configuration and does not create or start any service. Do not point these commands at an existing EthioTour database, an existing Compose project, or a shared acceptance environment.
+This is the single test-only runbook for the synthetic hotel pilot. It does not start services,
+provision identities, read `.env`, or modify production configuration. The commands below were
+prepared from source and were not executed against PostgreSQL, Keycloak, Docker, or a browser in
+this task.
 
-## Preconditions
+## PostgreSQL Migration And Integration Suite
 
-Provision a new PostgreSQL/PostGIS database exclusively for this test run. Bind its published port to loopback only. Use a host port from 50000 through 65535, excluding 56320, and a database name beginning `ethio_tour_hotel_test_`. Prefer storage with an explicit disposable lifetime; the test suite leaves its randomized records in place and does not reset the database. The suite also temporarily creates and drops test-only trigger objects.
+Provision a **new, dedicated, disposable PostgreSQL/PostGIS database** for this test run. Bind
+only to loopback, choose a high host port from `50000` through `65535` other than `56320`, and
+use a database name beginning `ethio_tour_hotel_test_`. The test suite creates synthetic rows
+and leaves them in place; it does not reset, seed, or clean the database. Its trigger-rejection
+case creates and drops only its own test trigger and function.
 
-The integration test normally skips unless both `HOTEL_PILOT_TEST_DISPOSABLE=true` and `HOTEL_PILOT_TEST_DATABASE_URL` pass its target guard. The guarded runner sets `HOTEL_PILOT_TEST_REQUIRED=true`; with that flag, an absent or invalid target fails before the suite can be reported as a skip. The test also checks that the hotel application table exists, so apply migrations first. Migration command `pnpm db:migrate` reads only the process-level `DATABASE_URL`; it applies all pending migrations in the repository journal, not just the hotel migration. For a fresh database this includes the existing registry baseline and additive hotel migration `0002_normal_ronan.sql`.
+In a dedicated shell, set these process variables without echoing or copying the URL into logs:
 
-Do not use a project `.env` file as the test target. In a new, dedicated PowerShell session, securely set `HOTEL_PILOT_TEST_DATABASE_URL` to the disposable database URL without echoing it. The guarded runner validates the target before migration and prints no URL or credentials:
+- `HOTEL_PILOT_TEST_DATABASE_URL`: the disposable database connection URL.
+- `HOTEL_PILOT_TEST_DISPOSABLE=true`: explicit opt-in for this test target.
 
-Only after provisioning, invoke the repository test-only runner:
+Do not source a project `.env` file. The test-only migration CLI reads only
+`HOTEL_PILOT_TEST_DATABASE_URL`; it ignores `DATABASE_URL`, refuses `NODE_ENV=production`,
+requires the opt-in, and validates PostgreSQL scheme, loopback host, explicit safe port, and the
+test database-name prefix before temporarily assigning the validated URL to the migration
+client. It never prints the connection URL or credentials. The ordinary `pnpm db:migrate`
+command remains the separate general development command and is not called by this test path.
+
+Run these commands in order:
 
 ```powershell
-./scripts/hotel-pilot-test.ps1
+pnpm install --frozen-lockfile
+pnpm build
+pnpm test:hotel:migration
+pnpm db:migrate:hotel-test
+pnpm test:hotel:integration
 ```
 
-Do not treat a skipped suite as a pass. The suite is guarded with `describe.skipIf`; its report must show zero skipped tests. Review test output for errors only and never add connection URLs, usernames, passwords, or tokens to logs or reports.
+`pnpm db:migrate:hotel-test` applies the repository's pending Drizzle migration chain to the
+validated test-only target. For a fresh database this includes the existing registry baseline
+and additive hotel migration `0002_normal_ronan.sql`. It writes no seed data.
+`pnpm test:hotel:migration` runs SQL-shape and URL-guard unit tests without connecting to a
+database. `pnpm test:hotel:integration` uses a dedicated Vitest config that sets
+`HOTEL_PILOT_TEST_REQUIRED=true`; an absent or invalid target fails during test loading instead
+of silently reporting a skipped suite. Require the explicit report to show zero skipped tests.
 
-Afterward, close the dedicated shell. Do not reset or reuse the database for unrelated tests; the suite intentionally leaves generated application and decision rows behind. Retire its disposable storage only through the separately approved environment-provisioning procedure, not through this test command sequence.
+The guard proves the URL has the required shape, not that the database was newly provisioned or
+owned by this task. Freshness and task ownership remain operator prerequisites. Do not run this
+path against an existing EthioTour database, any existing Compose project, or any shared volume.
 
-## Scope Limits
+## Real-Authentication Browser Journey
 
-This runbook does not provision Keycloak users, assign production authority, or configure a national Bureau routing table. The current route is explicitly synthetic. A real-auth browser journey is prepared in `tests/e2e/hotel-onboarding-live.spec.ts` and configured by `playwright.hotel.config.ts`; it has not been executed as part of this task. It requires a separately provisioned synthetic-only Keycloak realm, the workspace/API applications, and three distinct synthetic accounts with the applicant, Bureau-reviewer, and Administrator permissions needed by the pilot. The journey signs in through Keycloak's authorization-code flow and checks PKCE S256; it does not inject browser authentication.
+The browser journey is `tests/e2e/hotel-onboarding-live.spec.ts`, configured by
+`playwright.hotel.config.ts`. It uses the real Keycloak authorization-code + PKCE S256 flow and
+three distinct synthetic identities loaded from an external identity file. It creates a private
+application and decision history and does not clean those rows up. Use a fresh disposable API,
+database, Keycloak realm/storage, and workspace-web instance. The harness accepts loopback URLs
+only, rejects port `56320`, requires `HOTEL_E2E_DISPOSABLE=true`, and does not prove service or
+storage freshness. Keep the identity file outside Git, limit its OS access, and do not print its
+contents.
 
-Set these process environment variables in a dedicated test shell, using local non-secret service URLs and an absolute identity-file path outside the repository. The identity file must contain only accounts created for the disposable synthetic realm; protect it with the operating system's file-access controls. The harness verifies its location and shape, but does not prove account provenance or inspect filesystem permissions.
+Set these process variables in a dedicated test shell:
 
-- `HOTEL_E2E_DISPOSABLE=true`: explicit acknowledgement that all three endpoints target the fresh disposable test environment.
-- `HOTEL_E2E_WORKSPACE_URL`: workspace-web origin.
-- `HOTEL_E2E_API_URL`: API base URL whose path is exactly `/api`.
-- `HOTEL_E2E_KEYCLOAK_ISSUER_URL`: browser-reachable Keycloak realm issuer URL.
-- `HOTEL_E2E_IDENTITIES_FILE`: external JSON file with distinct `applicant`, `bureauReviewer`, and `administrator` objects, each containing `username` and `password` fields.
+- `HOTEL_E2E_DISPOSABLE=true`.
+- `HOTEL_E2E_WORKSPACE_URL`: local workspace-web origin.
+- `HOTEL_E2E_API_URL`: local API base URL with the `/api` path.
+- `HOTEL_E2E_KEYCLOAK_ISSUER_URL`: browser-reachable synthetic realm issuer.
+- `HOTEL_E2E_IDENTITIES_FILE`: absolute path to the external identity JSON with distinct
+  `applicant`, `bureauReviewer`, and `administrator` accounts.
 
-Run `pnpm test:e2e:hotel` only against a fresh disposable environment. The harness rejects non-loopback URLs and the reserved port `56320`, but the explicit opt-in is an operator assertion and cannot prove that local services or storage are fresh. The journey creates synthetic hotel application and decision records and does not clean them up. Keep the identity file out of Git and command output. The Playwright config disables screenshots, traces, and video; `test-results/` is ignored. A successful local service-free TypeScript check is not a live authentication, browser, database, or acceptance result.
+The Keycloak client must be `workspace-web`, allow the exact callback
+`<workspace-origin>/auth/callback`, and issue PKCE S256 authorization requests. Its access token
+must satisfy the API's configured audience validation. Provision the applicant, synthetic
+Bureau-reviewer, and platform-Administrator identities with the permissions required by the
+pilot; never use real accounts. The pilot Bureau route and outcomes are synthetic and do not
+establish nationwide coverage or government authority.
+
+The committed local realm configuration is not a ready-made isolated browser environment: its
+workspace client redirect is tied to `http://localhost:3001/*`. If the disposable workspace
+uses another origin, provision a **new disposable realm/client configuration** whose redirect
+URI is exactly `<HOTEL_E2E_WORKSPACE_URL>/auth/callback` and whose web origin matches
+`HOTEL_E2E_WORKSPACE_URL`; also align its issuer and the API's expected audience. Do not edit or
+reuse an existing realm to fit the test. The live spec does not provision users or database
+grants, and this runbook contains no user credentials or realm secrets; provisioning and
+identity-to-grant binding remain an operator prerequisite.
+
+This journey does not test restrictive CORS policy. At this candidate the API enables CORS with
+request-origin reflection (`origin: true` in `apps/backend/api/src/main.ts`), so a passing
+browser journey must not be treated as evidence that only the configured workspace origin is
+permitted. Resolve that application configuration separately before making a CORS-safety claim.
+
+After the disposable application services and identities have been provisioned independently,
+run:
+
+```powershell
+pnpm test:e2e:hotel
+```
+
+The Playwright config disables screenshots, traces, and video; `test-results/` and
+`playwright-report/` are ignored. A service-free typecheck or passing unit tests do not establish
+that sign-in, API authorization, migration, or the live browser journey works.
