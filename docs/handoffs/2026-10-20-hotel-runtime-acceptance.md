@@ -193,3 +193,150 @@ is a known limitation: the successful browser run does not establish a restricti
 production origin policy. Production deployment/policy, outside migration history,
 application images and remote CI remain unverified; final independent acceptance
 is not claimed by this checkpoint.
+
+## 2026-10-21: Exact-commit URL Follow-up Runtime Verification
+
+This section closes the earlier URL-precedence runtime gap; it does not replace
+historical evidence with a claim that every suite ran again.
+
+### Exact Source And Fresh Environment
+
+- Tested application source: **`9d5f2e02868dc7b2a1f6096e93b77f8c58680695`**,
+  branch `task/hotel-acceptance-canonical-20261020`, in the worktree above.
+  HEAD and a clean tracked/untracked status were checked before provisioning,
+  building, and runtime assertions. No application source changed during this run.
+  Only this handoff was edited afterward; no push or merge was performed.
+- Fresh project: `et-hotel-url-9d5f2e0-20261021`. Provisioning refused an existing
+  project or occupied requested ports. PostGIS data and Keycloak data used fresh
+  **tmpfs**, not named volumes. No previous realm, database, identity file, account,
+  service or storage was reused. Port 56320 was not inspected or used.
+- PostgreSQL: `127.0.0.1:55581`, database
+  `ethio_tour_hotel_test_url_9d5f2e0`. Before migration, a connection probe checked
+  the effective database and role, exact URL equality with the guarded test URL,
+  and absence of hotel tables. Application working directories had no `.env` or
+  `.env.local`; neither file's contents were opened. Migration used only the
+  guarded test target; seeding/API startup used the new empty runtime directory.
+- Keycloak issuer: `http://localhost:55582/realms/hotel-url-9d5f2e0`.
+  New realm with three distinct synthetic subject IDs and credentials generated
+  only inside a newly restricted task directory. Required synthetic names/email
+  fields were provided at creation; no required-action workaround was needed.
+  Client `workspace-web`, PKCE S256, audience `ethiotour-api`,
+  `OIDC_ALLOWED_CLIENTS=workspace-web`, no issuer aliases, JWKS at the issuer's
+  `/protocol/openid-connect/certs`. Exact callback:
+  `http://localhost:55584/auth/callback`; logout target/web origin:
+  `http://localhost:55584/` and `http://localhost:55584`, respectively.
+- API process: `http://127.0.0.1:55583/api`. Workspace:
+  `http://localhost:55584`. Browser API URL: `http://localhost:55585/api`, a
+  task-only transparent relay forwarding genuine requests to the same API.
+  No requests or authentication results were simulated in the live journey.
+  The relay deliberately returned 503 **only for `/api/health`** to make a
+  wrong server URL selection observable. This is external test configuration,
+  not a repository or architecture change.
+- Build variables: `NEXT_PUBLIC_API_BASE_URL=http://localhost:55585/api`,
+  `NEXT_PUBLIC_KEYCLOAK_ISSUER_URL` equal to the issuer above,
+  `NEXT_PUBLIC_KEYCLOAK_CLIENT_ID=workspace-web`, and
+  `NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI` equal to the callback above.
+  Server `API_BASE_URL=http://127.0.0.1:55583/api`. The API's existing entrypoint
+  binds `0.0.0.0`; the task containers, web process and relay bind loopback.
+  The synthetic API policy ran in development, while workspace used a production
+  Next build. No production decision authority was enabled.
+
+### Commands And Actual Results
+
+Temporary launchers were created outside Git in
+`C:\Users\Ermias\AppData\Local\EthioTour\hotel-url-9d5f2e0-20261021`.
+They supplied process environment values without printing credentials.
+The commands below completed with exit **0**, except explicitly noted attempts:
+
+- `docker compose --project-name et-hotel-url-9d5f2e0-20261021 --file <task-directory>\compose.json up -d --pull never`:
+  only two new task containers and their network created; both healthy before
+  acceptance. Exact images were already local; no registry retry was necessary.
+- `pnpm build`: all shared packages, API, worker and both Next applications built
+  from the exact source above. Existing Next ESLint-plugin warnings were non-fatal.
+- `pnpm db:migrate:hotel-test`: migrations **0000 through 0002 passed** on the
+  new database; three ledger entries confirmed. Normal PostGIS-already-present
+  and identifier-truncation notices were non-fatal.
+- The existing `packages/db/src/demo-seed-cli.ts` was executed through
+  `node <repo>\packages\db\node_modules\tsx\dist\cli.mjs <repo>\packages\db\src\demo-seed-cli.ts`
+  from the empty runtime directory. It assigned exactly two synthetic officers.
+  A read-only probe verified each realm subject's exact pair of active demo-only
+  Bureau/Administrator grants and disabled production powers. The applicant had
+  no profile or grants before first authentication. No client-created authority
+  was used. The Bureau route remains the existing synthetic demo route.
+- `pnpm exec playwright install chromium`: fresh task-local Playwright browser
+  installation completed. One Winldd download timed out at 30 seconds, then
+  Playwright's normal automatic fallback completed successfully.
+- Local API launch: `node <repo>\apps\backend\api\dist\main.js` with `PORT=55583`.
+  Workspace launch, from its package directory:
+  `node node_modules/next/dist/bin/next start --hostname 127.0.0.1 -p 55584`.
+- Runtime URL assertion: internal `/api/health` **200**, browser-relay
+  `/api/health` **503**, and server-rendered workspace `/` **200** containing
+  `API status: ok`. Because the public URL intentionally fails health, this
+  verifies that the real server component chose the configured internal URL.
+  The compiled browser chunk contained the explicit port-55585 public API URL.
+- `pnpm test:e2e:hotel`: **1 passed, 0 failed, 0 skipped**, 11.8 seconds total
+  (test 10.4 seconds). Process variables:
+  `HOTEL_E2E_DISPOSABLE=true`, `HOTEL_E2E_WORKSPACE_URL=http://localhost:55584`,
+  `HOTEL_E2E_API_URL=http://localhost:55585/api`,
+  `HOTEL_E2E_KEYCLOAK_ISSUER_URL=http://localhost:55582/realms/hotel-url-9d5f2e0`,
+  `HOTEL_E2E_IDENTITIES_FILE=<task-directory>\identities.json`,
+  `PLAYWRIGHT_BROWSERS_PATH=<task-directory>\playwright-browsers`.
+  The committed spec checked the actual browser API origin/path and real PKCE
+  exchange, then executed applicant submission, scoped independent Bureau review,
+  Administrator admission, repeated applicant sign-in and persisted private
+  workspace access, including its cross-role/privacy denials. The relay forwarded
+  **37 real API requests**; bearer tokens and responses were passed through, not
+  fabricated. Screenshots, traces and video stayed disabled.
+- PostgreSQL integration suite: **not rerun by design**. This delta changes URL
+  selection, not database behavior; the browser setup required fresh migrations
+  and the synthetic seed, not another integration-suite execution. Earlier
+  **13/13** results remain separately attributed above, not counted as this run.
+- Initial operator-only failures: the seed launcher first referenced a nonexistent
+  root `tsx` path (exit 1 before seeding), then was corrected to the package path;
+  an HTTP-probe variable named `$home` collided with PowerShell's read-only HOME
+  (exit 1), then the identical assertions passed with a different variable name.
+  An optional multi-file artifact-hash command had a PowerShell argument error;
+  it did not affect source, builds or acceptance. No application fixes, weaker
+  assertions, auth bypasses, or failed live-browser test attempts were needed.
+
+### Build And Infrastructure Provenance
+
+- PostGIS container ID:
+  `ac33137a130b5e22a69786c6c893a1bc22c66796dff8ff127f9a9418678ab757`;
+  image `postgis/postgis:16-3.5`, image ID
+  `sha256:94146ac37bc61e2322f88016056c5920729cb8c64c8542ed590af8fc2abdac07`.
+- Keycloak container ID:
+  `4e610afa3e718b95f1c8fd6fcafcf986d3840db7c07b89b78a1b9ffab2dd0e7c`;
+  image `quay.io/keycloak/keycloak:26.1.2`, image ID
+  `sha256:289bfb86e3b7d7ea6cfd54b09e1b1e33c31ee42a39317032afebb6ab54b17c9f`.
+  Both containers carried the exact task/source labels, checked before cleanup.
+- Workspace Next build ID: `bU_fJbODAG4k7GObewvZL`.
+  Compiled API `dist/main.js` SHA-256 change-detection fingerprint:
+  `6FF190A1D99A21A6F5388744CC72809053D916DCF00D4926C582875AE593ABFE`.
+  These are local-process builds, **not application Docker images**. Application
+  Docker-image verification, remote CI and independent final acceptance remain
+  unverified; they are not established by healthy infrastructure containers.
+
+### Cleanup And Remaining Limits
+
+API, workspace and relay processes were deliberately stopped with Ctrl-C
+(their interrupted launcher exit codes were 1, not failed acceptance checks).
+`docker compose --project-name et-hotel-url-9d5f2e0-20261021 --file <task-directory>\compose.json down --remove-orphans`
+exited **0**, removing only both new task containers and their task network.
+Their tmpfs storage disappeared with them; no named volume or shared storage was
+created or removed. A separate read-only check confirmed zero task containers,
+zero task networks and no listeners on 55581 through 55585.
+
+**Local-file cleanup remains incomplete.** Shell policy rejected the native
+PowerShell removal command for this run's new restricted task directory before
+execution. No deletion retry, alternative method or policy bypass was attempted.
+The directory still contains this run's restricted synthetic identity/configuration
+files and browser cache. Previous rejected cleanup targets were left untouched.
+The ignored `test-results/hotel-onboarding/.last-run.json` was updated by this run;
+it was not deleted or treated as fresh runtime storage. No existing application
+stacks, worktrees, databases, realms, credentials or volumes were modified.
+
+The exact-commit **URL precedence/live browser evidence gap is closed**. This is
+still synthetic private hotel admission only. The previously documented production
+CORS/policy, external migration history, application-image and CI limitations
+remain; no whole-platform or independent final acceptance claim is made.
