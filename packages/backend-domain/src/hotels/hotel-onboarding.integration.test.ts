@@ -173,12 +173,30 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
        VALUES ($1, 'Synthetic wrong-scope unit', 'woreda', true) RETURNING id`,
       [`hotel-test-other-unit-${randomUUID()}`],
     );
-    await grant(mixedReviewer, fixture.route.organizationId, otherUnit!.id, [
-      'hotel:application:bureau:decide',
-    ]);
-    await grant(mixedReviewer, fixture.route.organizationId, fixture.route.administrativeUnitId, [
-      'hotel:application:bureau:read',
-    ]);
+    const mixedReviewerProfileId = await profileId(mixedReviewer);
+    const [mixedReviewerMembership] = await client.unsafe<{ id: string }[]>(
+      `INSERT INTO memberships (user_profile_id, organization_id, label)
+       VALUES ($1, $2, 'Synthetic mixed-grant test role') RETURNING id`,
+      [mixedReviewerProfileId, fixture.route.organizationId],
+    );
+    if (!mixedReviewerMembership) throw new Error('Mixed-grant membership was not created.');
+    const [decisionGrant] = await client.unsafe<{ id: string }[]>(
+      `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
+       VALUES ($1, 'hotel:application:bureau:decide', $2, true, false) RETURNING id`,
+      [mixedReviewerMembership.id, fixture.route.organizationId],
+    );
+    const [readGrant] = await client.unsafe<{ id: string }[]>(
+      `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
+       VALUES ($1, 'hotel:application:bureau:read', $2, true, false) RETURNING id`,
+      [mixedReviewerMembership.id, fixture.route.organizationId],
+    );
+    if (!decisionGrant || !readGrant)
+      throw new Error('Mixed-grant capability rows were not created.');
+    await client.unsafe(
+      `INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants)
+       VALUES ($1, $2, false), ($3, $4, false)`,
+      [decisionGrant.id, otherUnit!.id, readGrant.id, fixture.route.administrativeUnitId],
+    );
 
     await expect(
       service.decideBureauCase(mixedReviewer, await getCaseId(created.id), {
@@ -267,7 +285,8 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     const fixture = await seedFixture();
     const created = await service.createApplication(fixture.applicant, { content: content() });
     await service.submitApplication(fixture.applicant, created.id, created.version);
-    expect((await service.listAdmissionQueue(fixture.administrator)).items).toHaveLength(0);
+    const admissionQueue = await service.listAdmissionQueue(fixture.administrator);
+    expect(admissionQueue.items).not.toContainEqual(expect.objectContaining({ id: created.id }));
     await expect(
       service.decideAdmission(fixture.administrator, created.id, {
         expectedVersion: 2,

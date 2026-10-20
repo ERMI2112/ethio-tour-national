@@ -242,15 +242,20 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
     await expectUiApiResponse(applicant.apiResponses, 'GET', 'hotels/applications', 200);
 
     await applicant.page.getByRole('link', { name: 'Bureau review queue' }).click();
-    await expect(applicant.page.getByRole('alert')).toContainText('not permitted');
+    await expect(applicant.page.locator('p.error-message[role="alert"]')).toContainText(
+      'not permitted',
+    );
     await expectUiApiResponse(applicant.apiResponses, 'GET', 'bureau/hotel-cases', 403);
     await applicant.page.getByRole('link', { name: 'Administrator admission' }).click();
-    await expect(applicant.page.getByRole('alert')).toContainText('not permitted');
+    await expect(applicant.page.locator('p.error-message[role="alert"]')).toContainText(
+      'not permitted',
+    );
     await expectUiApiResponse(applicant.apiResponses, 'GET', 'admin/hotel-admissions', 403);
     await applicant.page.getByRole('link', { name: 'Applicant applications' }).click();
 
-    await applicant.page.getByLabel('Hotel name stated in this application').fill(hotelName);
-    await applicant.page.getByLabel('Application notes').fill(applicantNotes);
+    const newApplicationForm = applicant.page.getByRole('region', { name: 'Start an application' });
+    await newApplicationForm.getByLabel('Hotel name stated in this application').fill(hotelName);
+    await newApplicationForm.getByLabel('Application notes').fill(applicantNotes);
     const createResponsePromise = applicant.page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
@@ -328,7 +333,7 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
     const bureauCaseCard = bureau.page
       .locator('article.application-card')
       .filter({ has: bureau.page.getByRole('heading', { name: hotelName }) });
-    await expect(bureauCaseCard.locator('.status')).toHaveText('submitted');
+    await expect(bureauCaseCard.locator('.status')).toHaveText('in review');
     await expect(bureau.page.getByText(applicantNotes)).toBeVisible();
     const bureauOwnerAttempt = await authenticatedGet(bureau, applicationRoute);
     await expectStatus(
@@ -347,14 +352,14 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
       'Bureau reviewer cannot read Administrator queue',
     );
 
-    await bureau.page.getByLabel('Decision for this submitted version').selectOption('approve');
-    await bureau.page.getByLabel('Reason').fill('Synthetic pilot Bureau review result.');
+    await bureauCaseCard.getByLabel('Decision for this submitted version').selectOption('approve');
+    await bureauCaseCard.getByLabel('Reason').fill('Synthetic pilot Bureau review result.');
     const bureauDecisionPromise = bureau.page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
         /\/api\/bureau\/hotel-cases\/[^/]+\/decision$/.test(new URL(response.url()).pathname),
     );
-    await bureau.page.getByRole('button', { name: 'Record Bureau decision' }).click();
+    await bureauCaseCard.getByRole('button', { name: 'Record Bureau decision' }).click();
     const bureauDecisionResponse = await bureauDecisionPromise;
     await expectStatus(bureauDecisionResponse, 201, 'Scoped Bureau decision');
     expectConfiguredApiUrl(
@@ -372,7 +377,12 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
     actors.push(administrator);
     await expectUiApiResponse(administrator.apiResponses, 'GET', 'admin/hotel-admissions', 200);
     await expect(administrator.page.getByRole('heading', { name: hotelName })).toBeVisible();
-    await expect(administrator.page.getByText(/Synthetic Bureau outcome: approve/i)).toBeVisible();
+    const administratorApplicationCard = administrator.page
+      .locator('article.application-card')
+      .filter({ has: administrator.page.getByRole('heading', { name: hotelName }) });
+    await expect(
+      administratorApplicationCard.getByText(/Synthetic Bureau outcome: approve/i),
+    ).toBeVisible();
     const administratorOwnerAttempt = await authenticatedGet(administrator, applicationRoute);
     await expectStatus(
       administratorOwnerAttempt,
@@ -395,10 +405,10 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
       'Administrator cannot read another account private workspace',
     );
 
-    await administrator.page
+    await administratorApplicationCard
       .getByLabel('Private platform admission decision')
       .selectOption('admit');
-    await administrator.page
+    await administratorApplicationCard
       .getByLabel('Reason', { exact: true })
       .fill('Synthetic pilot private workspace admission.');
     const admissionPromise = administrator.page.waitForResponse(
@@ -408,7 +418,7 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
           `/api/admin/hotel-admissions/${created.id}/decision`,
         ),
     );
-    await administrator.page
+    await administratorApplicationCard
       .getByRole('button', { name: 'Record private admission decision' })
       .click();
     const admissionResponse = await admissionPromise;

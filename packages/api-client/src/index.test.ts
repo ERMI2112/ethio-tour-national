@@ -13,6 +13,73 @@ import {
 describe('API client', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('prefers the explicit public API URL for browser requests over the internal API URL', async () => {
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://localhost:55473/api');
+    vi.stubEnv('API_BASE_URL', 'http://api:4000/api');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getPublicDestinations();
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:55473/api/public/destinations', {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {},
+    });
+  });
+
+  it('prefers the internal API URL for server callers when a public URL is also configured', async () => {
+    vi.stubGlobal('window', undefined);
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://localhost:55473/api');
+    vi.stubEnv('API_BASE_URL', 'http://api:4000/api');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getApiHealth();
+
+    expect(fetchMock).toHaveBeenCalledWith('http://api:4000/api/health', expect.any(Object));
+  });
+
+  it('falls back to the public API URL for a local server without an internal URL', async () => {
+    vi.stubGlobal('window', undefined);
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://localhost:55473/api');
+    vi.stubEnv('API_BASE_URL', '');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getPublicDestinations();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:55473/api/public/destinations',
+      expect.any(Object),
+    );
+  });
+
+  it('does not use the internal API URL in a browser without public configuration', async () => {
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', '');
+    vi.stubEnv('API_BASE_URL', 'http://api:4000/api');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getPublicDestinations();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4000/api/public/destinations',
+      expect.any(Object),
+    );
   });
 
   it('reads health only through the configured API base URL', async () => {

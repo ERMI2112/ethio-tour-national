@@ -43,9 +43,18 @@ export class ApiClientError extends Error {
 
 export const API_UNAUTHORIZED_EVENT = 'ethio-tour:unauthorized';
 
-export async function getApiHealth(
-  apiBaseUrl = process.env.API_BASE_URL ?? 'http://localhost:4000/api',
-): Promise<HealthResponse> {
+function defaultApiBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return (
+      process.env.API_BASE_URL ||
+      process.env.NEXT_PUBLIC_API_BASE_URL ||
+      'http://localhost:4000/api'
+    );
+  }
+  return process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000/api';
+}
+
+export async function getApiHealth(apiBaseUrl = defaultApiBaseUrl()): Promise<HealthResponse> {
   return apiRequest('health', 'GET', { apiBaseUrl });
 }
 
@@ -243,7 +252,7 @@ async function apiRequest<T>(
   options: ApiRequestOptions,
   body?: unknown,
 ): Promise<T> {
-  const apiBaseUrl = options.apiBaseUrl ?? process.env.API_BASE_URL ?? 'http://localhost:4000/api';
+  const apiBaseUrl = options.apiBaseUrl ?? defaultApiBaseUrl();
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (options.accessToken) headers.authorization = `Bearer ${options.accessToken}`;

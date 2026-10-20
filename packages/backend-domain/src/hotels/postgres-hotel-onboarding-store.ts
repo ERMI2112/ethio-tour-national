@@ -51,6 +51,7 @@ const applicationSelect = `
           JOIN hotel_bureau_decisions bureau_decision ON bureau_decision.case_id = bureau_case.id
           JOIN hotel_application_versions decided_version ON decided_version.id = bureau_case.application_version_id
           WHERE bureau_case.application_id = application.id
+            AND bureau_case.application_version_id = application.current_submitted_version_id
           ORDER BY decided_version.version_number DESC, bureau_decision.created_at DESC
           LIMIT 1) AS bureau_decision,
          (SELECT jsonb_build_object(
@@ -62,6 +63,7 @@ const applicationSelect = `
           FROM hotel_admission_decisions admission_decision
           JOIN hotel_application_versions decided_version ON decided_version.id = admission_decision.application_version_id
           WHERE admission_decision.application_id = application.id
+            AND admission_decision.application_version_id = application.current_submitted_version_id
           ORDER BY decided_version.version_number DESC, admission_decision.created_at DESC
           LIMIT 1) AS admission_decision,
          current_version.id AS response_version_id
@@ -638,7 +640,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     const profileId = await this.resolveProfile(actor, false);
     if (!profileId) return null;
     const [row] = await this.sql.unsafe<Row[]>(
-      `SELECT application.id, provider.organization_id
+      `SELECT application.id, provider.id
        FROM hotel_applications application
        JOIN memberships provider_membership
          ON provider_membership.user_profile_id = application.applicant_profile_id
@@ -742,7 +744,8 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
   ): Promise<Row | null> {
     const [row] = await this.sql.unsafe<Row[]>(
       `SELECT id, applicant_profile_id, status, admission_status, current_version_number,
-              current_submitted_version_id, draft_content, version, provider_organization_id
+              current_submitted_version_id, draft_content, version, provider_organization_id,
+              is_synthetic
        FROM hotel_applications WHERE id = $1 AND applicant_profile_id = $2 FOR UPDATE`,
       [applicationId, profileId],
     );
@@ -752,7 +755,8 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
   private async lockApplication(applicationId: string): Promise<Row | null> {
     const [row] = await this.sql.unsafe<Row[]>(
       `SELECT id, applicant_profile_id, status, admission_status, current_version_number,
-              current_submitted_version_id, draft_content, version, provider_organization_id
+              current_submitted_version_id, draft_content, version, provider_organization_id,
+              is_synthetic
        FROM hotel_applications WHERE id = $1 FOR UPDATE`,
       [applicationId],
     );

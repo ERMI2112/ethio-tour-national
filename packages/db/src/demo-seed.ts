@@ -328,7 +328,7 @@ export async function seedSyntheticRegistryDemo(
               membership_id, capability, organization_id, active, demo_only, production_decision_enabled
             ) VALUES ($1, $2, $3, true, true, false)
             ON CONFLICT (membership_id, capability, organization_id) DO NOTHING
-            RETURNING id
+            RETURNING id, demo_only, production_decision_enabled
           `,
           [membershipId, capability, scope.organizationId],
         );

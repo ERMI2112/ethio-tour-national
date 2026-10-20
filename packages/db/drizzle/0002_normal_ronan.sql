@@ -79,6 +79,7 @@ ALTER TABLE "hotel_applications" ADD CONSTRAINT "hotel_applications_current_subm
 ALTER TABLE "hotel_applications" ADD CONSTRAINT "hotel_applications_provider_organization_id_organizations_id_fk" FOREIGN KEY ("provider_organization_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "hotel_bureau_cases" ADD CONSTRAINT "hotel_bureau_cases_bureau_organization_id_organizations_id_fk" FOREIGN KEY ("bureau_organization_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "hotel_bureau_cases" ADD CONSTRAINT "hotel_bureau_cases_scope_unit_id_administrative_units_id_fk" FOREIGN KEY ("scope_unit_id") REFERENCES "public"."administrative_units"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "hotel_application_versions_app_id_uq" ON "hotel_application_versions" USING btree ("application_id","id");--> statement-breakpoint
 ALTER TABLE "hotel_bureau_cases" ADD CONSTRAINT "hotel_bureau_cases_version_fk" FOREIGN KEY ("application_id","application_version_id") REFERENCES "public"."hotel_application_versions"("application_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "hotel_bureau_decisions" ADD CONSTRAINT "hotel_bureau_decisions_case_id_hotel_bureau_cases_id_fk" FOREIGN KEY ("case_id") REFERENCES "public"."hotel_bureau_cases"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "hotel_bureau_decisions" ADD CONSTRAINT "hotel_bureau_decisions_application_version_id_hotel_application_versions_id_fk" FOREIGN KEY ("application_version_id") REFERENCES "public"."hotel_application_versions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -87,7 +88,6 @@ ALTER TABLE "hotel_bureau_decisions" ADD CONSTRAINT "hotel_bureau_decisions_revi
 CREATE UNIQUE INDEX "hotel_admission_decisions_app_version_uq" ON "hotel_admission_decisions" USING btree ("application_id","application_version_id");--> statement-breakpoint
 CREATE INDEX "hotel_admission_decisions_created_idx" ON "hotel_admission_decisions" USING btree ("created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "hotel_application_versions_app_number_uq" ON "hotel_application_versions" USING btree ("application_id","version_number");--> statement-breakpoint
-CREATE UNIQUE INDEX "hotel_application_versions_app_id_uq" ON "hotel_application_versions" USING btree ("application_id","id");--> statement-breakpoint
 CREATE INDEX "hotel_application_versions_submitted_idx" ON "hotel_application_versions" USING btree ("submitted_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "hotel_applications_provider_org_uq" ON "hotel_applications" USING btree ("provider_organization_id");--> statement-breakpoint
 CREATE INDEX "hotel_applications_owner_idx" ON "hotel_applications" USING btree ("applicant_profile_id","updated_at");--> statement-breakpoint
