@@ -113,19 +113,84 @@ export type HotelAdmissionStatus = 'not_eligible' | 'pending' | 'admitted' | 'de
 export interface HotelApplicationContent {
   claimedHotelName: string;
   applicantNotes: string;
-  /** Optional on private legacy drafts; required by the server at submission. */
+  /** Legacy selection retained only when reading/updating pre-directory drafts. */
   administrativeUnitId?: string;
+  /** Required for new submissions; references one immutable directory release. */
+  locationSelection?: HotelLocationSelection;
+}
+
+export interface HotelLocationSelection {
+  geographyReleaseId: string;
+  unitId: string;
+  unitRevisionId: string;
+}
+
+export interface HotelLocationSearchQuery {
+  query?: string;
+  language?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface HotelLocationDirectoryRelease {
+  id: string;
+  sourceEdition: string;
+  effectiveFrom: string | null;
+  synthetic: boolean;
 }
 
 export interface HotelLocationNode {
+  unitId: string;
+  unitRevisionId: string;
+  unitType: string;
+  displayName: string;
+}
+
+export interface HotelLocationSearchResult extends HotelLocationNode {
+  /** Root-to-selected-unit path from the same immutable release. */
+  hierarchy: HotelLocationNode[];
+  matchedName: {
+    value: string;
+    language: string;
+    script: string | null;
+  };
+}
+
+export interface HotelLocationSearchResponse {
+  directoryRelease: HotelLocationDirectoryRelease;
+  items: HotelLocationSearchResult[];
+  nextCursor: string | null;
+}
+
+/** Location snapshot attached to one submitted application version. */
+export interface HotelSubmittedLocation {
+  geographyReleaseId: string;
+  unitId: string;
+  unitRevisionId: string;
+  unitType: string;
+  displayName: string;
+  hierarchy: HotelLocationNode[];
+}
+
+/** Assignment is returned only by an already-authorized Bureau case endpoint. */
+export interface HotelBureauAssignmentSummary {
+  routingReleaseId: string;
+  routingRuleId: string;
+  organizationId: string;
+  scopeUnitId: string;
+}
+
+/** @deprecated Legacy projection retained for historical application responses. */
+export interface LegacyHotelLocationNode {
   id: string;
   label: string;
   parentId: string | null;
 }
 
-export interface HotelLocation extends HotelLocationNode {
+/** @deprecated Legacy projection retained for historical application responses. */
+export interface HotelLocation extends LegacyHotelLocationNode {
   /** Root-to-selected-node labels, with no office or authorization metadata. */
-  hierarchy: HotelLocationNode[];
+  hierarchy: LegacyHotelLocationNode[];
 }
 
 export interface HotelLocationDirectoryResponse {
@@ -198,6 +263,8 @@ export interface HotelApplicationListResponse {
 export interface HotelBureauCaseResponse extends HotelApplicationResponse {
   caseId: string;
   caseStatus: HotelBureauCaseStatus;
+  submittedLocation: HotelSubmittedLocation | null;
+  assignment: HotelBureauAssignmentSummary;
 }
 
 export interface HotelBureauCaseListResponse {

@@ -12,6 +12,8 @@ import type {
   HotelBureauCaseListResponse,
   HotelBureauCaseResponse,
   HotelLocationDirectoryResponse,
+  HotelLocationSearchQuery,
+  HotelLocationSearchResponse,
   PrivateRegistryResourceResponse,
   PublicAttraction,
   PublicDestination,
@@ -168,6 +170,19 @@ export function getHotelLocations(
   options: AuthenticatedApiRequestOptions,
 ): Promise<HotelLocationDirectoryResponse> {
   return apiRequest('hotels/locations', 'GET', options);
+}
+
+export function searchHotelLocations(
+  query: HotelLocationSearchQuery,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelLocationSearchResponse> {
+  const parameters = new URLSearchParams();
+  if (query.query !== undefined) parameters.set('query', query.query);
+  if (query.language !== undefined) parameters.set('language', query.language);
+  if (query.limit !== undefined) parameters.set('limit', String(query.limit));
+  if (query.cursor !== undefined) parameters.set('cursor', query.cursor);
+  const suffix = parameters.size ? `?${parameters.toString()}` : '';
+  return apiRequest(`hotels/locations${suffix}`, 'GET', options);
 }
 
 export function getHotelBureauCase(

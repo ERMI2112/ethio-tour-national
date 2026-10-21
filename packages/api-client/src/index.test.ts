@@ -8,6 +8,7 @@ import {
   getAdmittedHotelWorkspace,
   getApiHealth,
   getHotelLocations,
+  searchHotelLocations,
   getHotelBureauCase,
   getPublicDestinations,
 } from './index';
@@ -27,6 +28,38 @@ describe('API client', () => {
       cache: 'no-store',
       headers: { authorization: 'Bearer synthetic-token' },
     });
+  });
+
+  it('searches a pinned hotel geography release through bounded API query parameters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          directoryRelease: {
+            id: 'release-a',
+            sourceEdition: 'synthetic-2026-01',
+            effectiveFrom: null,
+            synthetic: true,
+          },
+          items: [],
+          nextCursor: null,
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await searchHotelLocations(
+      { query: 'Gondar / town', language: 'am-Ethi', limit: 20, cursor: 'opaque+/=' },
+      { apiBaseUrl: 'http://api:4000/api', accessToken: 'synthetic-token' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api:4000/api/hotels/locations?query=Gondar+%2F+town&language=am-Ethi&limit=20&cursor=opaque%2B%2F%3D',
+      {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { authorization: 'Bearer synthetic-token' },
+      },
+    );
   });
 
   it('encodes a private Bureau case ID without choosing an office or scope', async () => {
