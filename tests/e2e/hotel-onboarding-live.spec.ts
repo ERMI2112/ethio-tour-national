@@ -660,6 +660,15 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
         .getByLabel('Submitted location'),
     ).toContainText(hierarchyB);
     await returningCardB.getByRole('link', { name: 'Direct workspace link' }).click();
+    await expect(reauthenticatedApplicant.page).toHaveURL(
+      new URL(`/hotels/workspace/${createdB.id}`, hotelE2eConfig.workspaceUrl).href,
+    );
+    await expect(
+      reauthenticatedApplicant.page.getByRole('heading', {
+        name: 'Admitted hotel workspace',
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(reauthenticatedApplicant.page.getByLabel('Submitted location')).toContainText(
       hierarchyB,
     );
