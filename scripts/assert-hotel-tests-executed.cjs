@@ -1,3 +1,5 @@
+/* global require, process, console */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require('node:fs');
 
 const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));

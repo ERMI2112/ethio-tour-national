@@ -159,6 +159,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     geographyReleaseId: string,
     unitId: string,
     unitRevisionId: string,
+    language = '',
   ): Promise<HotelSubmittedLocation | null> {
     const rows = await this.sql.unsafe<Row[]>(
       `WITH RECURSIVE chain AS (
@@ -181,13 +182,17 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
          SELECT name.value FROM hotel_geography_names name
          WHERE name.geography_release_id = $1 AND name.unit_revision_id = chain.id
            AND name.name_kind = 'display'
-         ORDER BY CASE WHEN lower(name.language_tag) = 'en' THEN 0 ELSE 1 END,
+         ORDER BY CASE
+                    WHEN $4 = '' AND lower(name.language_tag) = 'en' THEN 0
+                    WHEN lower(name.language_tag) = lower($4) THEN 0
+                    WHEN lower(split_part(name.language_tag, '-', 1)) = lower(split_part($4, '-', 1)) THEN 1
+                    WHEN lower(name.language_tag) = 'en' THEN 2 ELSE 3 END,
                   name.language_tag COLLATE "C", COALESCE(name.script, '') COLLATE "C",
                   name.normalized_value COLLATE "C", name.id
          LIMIT 1
        ) display_name ON true
        ORDER BY chain.depth DESC`,
-      [geographyReleaseId, unitId, unitRevisionId],
+      [geographyReleaseId, unitId, unitRevisionId, language],
     );
     if (!rows.length || rows.some((row) => !row.display_name)) return null;
     const hierarchy = rows.map((row) => ({
@@ -309,7 +314,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     for (const row of page) {
       const unitId = stringValue(row.unit_id);
       const unitRevisionId = stringValue(row.unit_revision_id);
-      const location = await this.versionedLocation(releaseId, unitId, unitRevisionId);
+      const location = await this.versionedLocation(releaseId, unitId, unitRevisionId, language);
       if (!location) continue;
       items.push({
         unitId,

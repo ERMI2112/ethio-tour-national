@@ -192,6 +192,7 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
       displayName: 'Localite synthetique A',
       matchedName: { language: 'fr' },
     });
+    expect(alias.items[0]!.hierarchy.at(-1)?.displayName).toBe(alias.items[0]!.displayName);
     expect(
       (await f.service.listLocations(f.applicant, { query: '%_' })).items.map(
         (item) => item.unitId,
