@@ -86,6 +86,7 @@ export class PostgresHotelOnboardingStore implements HotelOnboardingStore {
 }
 
 class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
+  // Text-to-JSONB binds work with both raw clients and Drizzle's overridden JSON serializers.
   constructor(private readonly sql: SqlTransaction) {}
 
   private async location(unitId: string): Promise<HotelLocation | null> {
@@ -219,8 +220,8 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     const profileId = await this.resolveProfile(actor, true);
     const [created] = await this.sql.unsafe<Row[]>(
       `INSERT INTO hotel_applications (applicant_profile_id, draft_content)
-       VALUES ($1, $2::jsonb) RETURNING id`,
-      [profileId, this.sql.json(content as unknown as postgres.JSONValue)],
+       VALUES ($1, $2::text::jsonb) RETURNING id`,
+      [profileId, JSON.stringify(content)],
     );
     if (!created?.id) throw new Error('Created hotel application insert returned no row.');
     const [row] = await this.sql.unsafe<Row[]>(`${applicationSelect} WHERE application.id = $1`, [
@@ -282,11 +283,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     await this.requireAdmittedWorkspaceGrant(actor, row, 'hotel:workspace:edit');
     await this.sql.unsafe(
       `UPDATE hotel_applications
-       SET draft_content = $3::jsonb, status = 'draft',
+       SET draft_content = $3::text::jsonb, status = 'draft',
            admission_status = CASE WHEN admission_status = 'admitted' THEN 'admitted' ELSE 'not_eligible' END,
            version = version + 1, updated_at = now()
        WHERE id = $1 AND applicant_profile_id = $2`,
-      [applicationId, profileId, this.sql.json(content as unknown as postgres.JSONValue)],
+      [applicationId, profileId, JSON.stringify(content)],
     );
     await this.appendAudit(
       actor,
@@ -352,15 +353,15 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `INSERT INTO hotel_application_versions
          (application_id, version_number, content, submitted_by_profile_id,
           location_unit_id, location_snapshot, bureau_organization_id, scope_unit_id)
-       VALUES ($1, $2, $3::jsonb, $4, $5, $6::jsonb, $7, $5)
+       VALUES ($1, $2, $3::text::jsonb, $4, $5, $6::text::jsonb, $7, $5)
        RETURNING id`,
       [
         applicationId,
         nextNumber,
-        this.sql.json(content as unknown as postgres.JSONValue),
+        JSON.stringify(content),
         profileId,
         unitId,
-        this.sql.json(location as unknown as postgres.JSONValue),
+        JSON.stringify(location),
         route.organizationId,
       ],
     );
@@ -909,7 +910,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `INSERT INTO audit_events
          (actor_issuer, actor_subject_id, actor_membership_id, action, outcome,
           target_resource_id, target_revision_id, reason_code, policy_version, details)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text::jsonb)`,
       [
         actor.issuer,
         actor.subjectId,
@@ -920,7 +921,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
         revisionId,
         reasonCode,
         POLICY_VERSION,
-        this.sql.json(details),
+        JSON.stringify(details),
       ],
     );
   }

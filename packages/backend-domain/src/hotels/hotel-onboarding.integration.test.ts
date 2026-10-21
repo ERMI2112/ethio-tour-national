@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isDisposableHotelTestDatabase } from '@ethio-tour/db/testing/disposable-database-target';
+import { createDatabase } from '@ethio-tour/db';
 
 import { HotelOnboardingService } from './hotel-onboarding-service';
 import { PostgresHotelOnboardingStore } from './postgres-hotel-onboarding-store';
@@ -45,13 +46,29 @@ afterAll(async () => {
 });
 
 suite('synthetic hotel onboarding PostgreSQL integration', () => {
-  it('stores draft, submitted content, location and audit JSONB as objects with matching IDs', async () => {
-    const f = await seedFixture();
-    const created = await service.createApplication(f.applicant, { content: content() });
-    const updated = await service.updateDraft(f.applicant, created.id, created.version, content());
-    await service.submitApplication(f.applicant, created.id, updated.version);
-    const [stored] = await client.unsafe(
-      `SELECT
+  it.each(['raw', 'api-factory'])(
+    'stores matching object JSONB and denial audits with the %s client',
+    async (driver) => {
+      const f = await seedFixture();
+      const apiClient = driver === 'api-factory' ? createDatabase(databaseUrl!).client : null;
+      const scopedService = apiClient
+        ? new HotelOnboardingService(new PostgresHotelOnboardingStore(apiClient), {
+            enabled: true,
+            production: false,
+            administratorOrganizationId: null,
+          })
+        : service;
+      try {
+        const created = await scopedService.createApplication(f.applicant, { content: content() });
+        const updated = await scopedService.updateDraft(
+          f.applicant,
+          created.id,
+          created.version,
+          content(),
+        );
+        await scopedService.submitApplication(f.applicant, created.id, updated.version);
+        const [stored] = await client.unsafe(
+          `SELECT
       jsonb_typeof(a.draft_content) AS draft_type,
       jsonb_typeof(v.content) AS content_type,
       jsonb_typeof(v.location_snapshot) AS snapshot_type,
@@ -60,26 +77,40 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
       v.location_unit_id, v.scope_unit_id, v.bureau_organization_id
       FROM hotel_applications a JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id
       WHERE a.id = $1`,
-      [created.id],
-    );
-    expect(stored).toEqual({
-      draft_type: 'object',
-      content_type: 'object',
-      snapshot_type: 'object',
-      content_id: f.route.administrativeUnitId,
-      snapshot_id: f.route.administrativeUnitId,
-      location_unit_id: f.route.administrativeUnitId,
-      scope_unit_id: f.route.administrativeUnitId,
-      bureau_organization_id: f.route.organizationId,
-    });
-    const audits = await client.unsafe(
-      `SELECT jsonb_typeof(details) AS details_type FROM audit_events
+          [created.id],
+        );
+        expect(stored).toEqual({
+          draft_type: 'object',
+          content_type: 'object',
+          snapshot_type: 'object',
+          content_id: f.route.administrativeUnitId,
+          snapshot_id: f.route.administrativeUnitId,
+          location_unit_id: f.route.administrativeUnitId,
+          scope_unit_id: f.route.administrativeUnitId,
+          bureau_organization_id: f.route.organizationId,
+        });
+        const audits = await client.unsafe(
+          `SELECT jsonb_typeof(details) AS details_type FROM audit_events
       WHERE target_resource_id = $1 AND action IN ('hotel.application.created', 'hotel.application.draft_updated', 'hotel.application.submitted')`,
-      [created.id],
-    );
-    expect(audits).toHaveLength(3);
-    expect(audits.every((row) => row.details_type === 'object')).toBe(true);
-  });
+          [created.id],
+        );
+        expect(audits).toHaveLength(3);
+        expect(audits.every((row) => row.details_type === 'object')).toBe(true);
+        await expect(scopedService.listBureauCases(f.applicant)).rejects.toMatchObject({
+          code: 'forbidden',
+        });
+        const [denial] = await client.unsafe(
+          `SELECT jsonb_typeof(details) AS details_type, outcome
+      FROM audit_events WHERE actor_issuer = $1 AND actor_subject_id = $2
+      AND action = 'hotel.application.bureau.queue' ORDER BY created_at DESC LIMIT 1`,
+          [f.applicant.issuer, f.applicant.subjectId],
+        );
+        expect(denial).toEqual({ details_type: 'object', outcome: 'denied' });
+      } finally {
+        if (apiClient) await apiClient.end({ timeout: 5 });
+      }
+    },
+  );
 
   it.each(['submit', 'update-then-submit'])(
     'reads legacy string drafts and writes object snapshots on %s',
