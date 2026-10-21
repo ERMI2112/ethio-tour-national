@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { HotelLocation } from '@ethio-tour/contracts';
 import { HotelLocationDetails, HotelLocationSelector } from '../components/hotel-location';
+import { HotelDecisionHistory } from '../components/hotel-decision-history';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../lib/hotel-pilot-session';
 import {
@@ -374,17 +375,36 @@ function ApplicantApplicationCard({
                 {admittedWorkspace.workspaceAccess.replaceAll('_', ' ')} ·{' '}
                 <strong>Admission:</strong> {admittedWorkspace.admissionStatus.replaceAll('_', ' ')}
               </p>
+              <p className="muted">
+                Private workspace admission was recorded for submitted version{' '}
+                {admittedWorkspace.admittedVersion ?? 'not recorded'}.
+              </p>
+              {admittedWorkspace.admittedVersion !== null &&
+                admittedWorkspace.admittedVersion !== admittedWorkspace.currentVersion && (
+                  <p className="notice" role="note">
+                    Current application version {admittedWorkspace.currentVersion} is separate.
+                    Earlier Bureau and Administrator decisions do not approve this version.
+                  </p>
+                )}
               {admittedWorkspace.admissionDecision && (
                 <p>
-                  <strong>Administrator reason:</strong>{' '}
+                  <strong>
+                    Administrator decision for submitted version{' '}
+                    {admittedWorkspace.admissionDecision.applicationVersion}:
+                  </strong>{' '}
                   {admittedWorkspace.admissionDecision.reason}
                 </p>
               )}
               {admittedWorkspace.bureauDecision && (
                 <p>
-                  <strong>Bureau review reason:</strong> {admittedWorkspace.bureauDecision.reason}
+                  <strong>
+                    Bureau decision for submitted version{' '}
+                    {admittedWorkspace.bureauDecision.applicationVersion}:
+                  </strong>{' '}
+                  {admittedWorkspace.bureauDecision.reason}
                 </p>
               )}
+              <HotelDecisionHistory application={admittedWorkspace} />
               <p className="notice" role="note" style={{ marginTop: '8px' }}>
                 {admittedWorkspace.notice}
               </p>
@@ -397,8 +417,8 @@ function ApplicantApplicationCard({
         <div className="decision-details">
           <strong>
             {application.status === 'draft'
-              ? 'Previous submitted version outcome'
-              : 'Synthetic Bureau case outcome'}{' '}
+              ? `Previous submitted version ${application.bureauDecision.applicationVersion} outcome`
+              : `Bureau outcome for submitted version ${application.bureauDecision.applicationVersion}`}{' '}
             {application.bureauDecision.decision.replaceAll('_', ' ')}
           </strong>
           <p>{application.bureauDecision.reason}</p>
@@ -408,6 +428,7 @@ function ApplicantApplicationCard({
           </p>
         </div>
       )}
+      <HotelDecisionHistory application={application} />
       {canEditHotelApplication(application) && (
         <form className="form-stack decision-details" onSubmit={handleSubmit}>
           <h4>

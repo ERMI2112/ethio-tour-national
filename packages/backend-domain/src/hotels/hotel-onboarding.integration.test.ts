@@ -31,9 +31,11 @@ beforeAll(async () => {
   if (!safeDatabase || !databaseUrl) return;
   client = postgres(databaseUrl, { max: 8 });
   const [migration] = await client.unsafe<{ exists: boolean }[]>(
-    `SELECT to_regclass('public.hotel_applications') IS NOT NULL AS exists`,
+    `SELECT to_regclass('public.hotel_applications') IS NOT NULL
+       AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'hotel_bureau_case_binding_immutable' AND NOT tgisinternal)
+       AS exists`,
   );
-  if (!migration?.exists) throw new Error('Disposable database is missing hotel migration 0002.');
+  if (!migration?.exists) throw new Error('Disposable database is missing hotel migration 0004.');
   service = new HotelOnboardingService(new PostgresHotelOnboardingStore(client), {
     enabled: true,
     production: false,
@@ -357,7 +359,7 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     ).not.toContain(created.id);
   });
 
-  it('keeps location-less legacy versions bound to saved cases and current approvals', async () => {
+  it('preserves location-less legacy case history but fails closed without a version route binding', async () => {
     const f = await seedFixture();
     const legacy = { claimedHotelName: 'Legacy synthetic', applicantNotes: 'Legacy version' };
     const created = await service.createApplication(f.applicant, { content: legacy });
@@ -378,24 +380,35 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
       f.route.administrativeUnitId,
     ]);
     const caseId = await getCaseId(created.id);
-    expect(
-      (await service.listBureauCases(f.reviewer)).items.find((item) => item.caseId === caseId)
-        ?.location,
-    ).toBeNull();
-    expect((await service.getBureauCase(f.reviewer, caseId)).location).toBeNull();
-    const approved = await service.decideBureauCase(f.reviewer, caseId, {
-      expectedVersion: created.version,
-      decision: 'approve',
-      reason: 'Legacy saved assignment',
+    expect((await service.listBureauCases(f.reviewer)).items).not.toContainEqual(
+      expect.objectContaining({ caseId }),
+    );
+    await expect(service.getBureauCase(f.reviewer, caseId)).rejects.toMatchObject({
+      code: 'not_found',
     });
-    expect(approved.location).toBeNull();
+    await expect(
+      service.decideBureauCase(f.reviewer, caseId, {
+        expectedVersion: created.version,
+        decision: 'approve',
+        reason: 'Unbound legacy case must remain read-only.',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
     await expect(
       service.decideAdmission(f.administrator, created.id, {
-        expectedVersion: approved.version,
+        expectedVersion: created.version,
         decision: 'admit',
-        reason: 'Legacy current approval',
+        reason: 'An unbound legacy case cannot authorize admission.',
       }),
-    ).resolves.toMatchObject({ admissionStatus: 'admitted', location: null });
+    ).rejects.toMatchObject({ code: 'not_found' });
+    const [preserved] = await client.unsafe<
+      { bureau_organization_id: string; scope_unit_id: string }[]
+    >(`SELECT bureau_organization_id, scope_unit_id FROM hotel_bureau_cases WHERE id = $1`, [
+      caseId,
+    ]);
+    expect(preserved).toEqual({
+      bureau_organization_id: f.route.organizationId,
+      scope_unit_id: f.route.administrativeUnitId,
+    });
   });
 
   it('creates private profile-owned drafts without membership or provider grants', async () => {
@@ -720,7 +733,7 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     );
   });
 
-  it('keeps private access after a post-admission resubmission without carrying forward approval', async () => {
+  it('keeps owner workspace access after a different-location resubmission without carrying forward decisions', async () => {
     const fixture = await seedFixture();
     const created = await service.createApplication(fixture.applicant, { content: content() });
     const submitted = await service.submitApplication(
@@ -738,8 +751,28 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
       decision: 'admit',
       reason: 'Private pilot admission.',
     });
+    const oldCaseId = await getCaseId(created.id);
+    const nextLocationId = `hotel-test-next-unit-${randomUUID()}`;
+    await client.unsafe(
+      `INSERT INTO administrative_units (id, display_name, level, parent_id, is_synthetic)
+       VALUES ($1, 'Synthetic alternate hotel location', 'woreda', NULL, true)`,
+      [nextLocationId],
+    );
+    await client.unsafe(`INSERT INTO hotel_locations (administrative_unit_id) VALUES ($1)`, [
+      nextLocationId,
+    ]);
+    await client.unsafe(
+      `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
+      [nextLocationId, fixture.otherBureauOrganizationId],
+    );
+    await grantInExistingMembership(
+      fixture.otherOrgReviewer,
+      fixture.otherBureauOrganizationId,
+      nextLocationId,
+      ['hotel:application:bureau:read', 'hotel:application:bureau:decide'],
+    );
     const draft = await service.updateDraft(fixture.applicant, created.id, admitted.version, {
-      ...content(),
+      ...content(nextLocationId),
       applicantNotes: 'Updated after private admission.',
     });
     const next = await service.submitApplication(fixture.applicant, created.id, draft.version);
@@ -749,16 +782,151 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
       admissionStatus: 'admitted',
       workspaceAccess: 'private_only',
       currentVersion: 2,
+      admittedVersion: 1,
       bureauDecision: null,
       admissionDecision: null,
+      location: expect.objectContaining({ id: nextLocationId }),
+      historicalBureauDecisions: [
+        expect.objectContaining({ decision: 'approve', applicationVersion: 1 }),
+      ],
+      historicalAdmissionDecisions: [
+        expect.objectContaining({ decision: 'admit', applicationVersion: 1 }),
+      ],
     });
-    expect(await service.getProviderWorkspace(fixture.applicant, created.id)).toMatchObject({
+    const workspace = await service.getProviderWorkspace(fixture.applicant, created.id);
+    expect(workspace).toMatchObject({
       status: 'submitted',
       workspaceAccess: 'private_only',
+      currentVersion: 2,
+      admittedVersion: 1,
+      location: expect.objectContaining({ id: nextLocationId }),
     });
+    expect(workspace?.historicalBureauDecisions[0]?.applicationVersion).toBe(1);
+    expect(workspace?.historicalAdmissionDecisions[0]?.applicationVersion).toBe(1);
+    await expect(
+      service.getProviderWorkspace(fixture.otherOrgReviewer, created.id),
+    ).rejects.toMatchObject({ code: 'not_found' });
+
+    const newCaseId = await getCaseId(created.id);
+    expect((await service.listBureauCases(fixture.reviewer)).items).not.toContainEqual(
+      expect.objectContaining({ caseId: newCaseId }),
+    );
+    const newCase = await service.getBureauCase(fixture.otherOrgReviewer, newCaseId);
+    expect(newCase).toMatchObject({
+      currentVersion: 2,
+      location: expect.objectContaining({ id: nextLocationId }),
+      bureauDecision: null,
+      historicalBureauDecisions: [],
+      historicalAdmissionDecisions: [],
+    });
+    expect((await service.listBureauCases(fixture.otherOrgReviewer)).items).toContainEqual(
+      expect.objectContaining({ caseId: newCaseId }),
+    );
+    await expect(
+      service.decideBureauCase(fixture.reviewer, oldCaseId, {
+        expectedVersion: next.version,
+        decision: 'approve',
+        reason: 'A prior-office decision cannot act on the new version.',
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    await expect(
+      service.decideAdmission(fixture.administrator, created.id, {
+        expectedVersion: next.version,
+        decision: 'admit',
+        reason: 'The new version has not received Bureau review.',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
     expect((await service.listAdmissionQueue(fixture.administrator)).items).not.toContainEqual(
       expect.objectContaining({ id: created.id }),
     );
+  });
+
+  it('rejects changes to a Bureau case version, organization, or scope after creation', async () => {
+    const fixture = await seedFixture();
+    const created = await service.createApplication(fixture.applicant, { content: content() });
+    await service.submitApplication(fixture.applicant, created.id, created.version);
+    const caseId = await getCaseId(created.id);
+    const nextScopeId = `hotel-test-reassignment-${randomUUID()}`;
+    await client.unsafe(
+      `INSERT INTO administrative_units (id, display_name, level, parent_id, is_synthetic)
+       VALUES ($1, 'Synthetic reassignment target', 'woreda', NULL, true)`,
+      [nextScopeId],
+    );
+    const [nextVersion] = await client.unsafe<{ id: string }[]>(
+      `INSERT INTO hotel_application_versions
+         (application_id, version_number, content, submitted_by_profile_id,
+          location_unit_id, location_snapshot, bureau_organization_id, scope_unit_id)
+       SELECT application_id, version_number + 1, content, submitted_by_profile_id,
+              location_unit_id, location_snapshot, bureau_organization_id, scope_unit_id
+       FROM hotel_application_versions WHERE id = (
+         SELECT application_version_id FROM hotel_bureau_cases WHERE id = $1
+       ) RETURNING id`,
+      [caseId],
+    );
+    if (!nextVersion) throw new Error('Synthetic next application version was not created.');
+
+    await expect(
+      client.unsafe(`UPDATE hotel_bureau_cases SET application_version_id = $2 WHERE id = $1`, [
+        caseId,
+        nextVersion.id,
+      ]),
+    ).rejects.toThrow('hotel Bureau case assignment is immutable');
+
+    await expect(
+      client.unsafe(`UPDATE hotel_bureau_cases SET bureau_organization_id = $2 WHERE id = $1`, [
+        caseId,
+        fixture.otherBureauOrganizationId,
+      ]),
+    ).rejects.toThrow('hotel Bureau case assignment is immutable');
+    await expect(
+      client.unsafe(`UPDATE hotel_bureau_cases SET scope_unit_id = $2 WHERE id = $1`, [
+        caseId,
+        nextScopeId,
+      ]),
+    ).rejects.toThrow('hotel Bureau case assignment is immutable');
+  });
+
+  it('excludes case assignment mismatches from both office queues, reads, and decisions', async () => {
+    const fixture = await seedFixture();
+    const created = await service.createApplication(fixture.applicant, { content: content() });
+    await service.submitApplication(fixture.applicant, created.id, created.version);
+    const [originalCase] = await client.unsafe<{ id: string; application_version_id: string }[]>(
+      `SELECT id, application_version_id FROM hotel_bureau_cases WHERE application_id = $1`,
+      [created.id],
+    );
+    if (!originalCase) throw new Error('Expected submitted Bureau case.');
+    await client.unsafe(`DELETE FROM hotel_bureau_cases WHERE id = $1`, [originalCase.id]);
+    const [mismatched] = await client.unsafe<{ id: string }[]>(
+      `INSERT INTO hotel_bureau_cases
+         (application_id, application_version_id, bureau_organization_id, scope_unit_id, status)
+       VALUES ($1, $2, $3, $4, 'in_review') RETURNING id`,
+      [
+        created.id,
+        originalCase.application_version_id,
+        fixture.otherBureauOrganizationId,
+        fixture.route.administrativeUnitId,
+      ],
+    );
+    if (!mismatched) throw new Error('Mismatched synthetic case insert returned no row.');
+
+    for (const reviewer of [fixture.reviewer, fixture.otherOrgReviewer]) {
+      expect((await service.listBureauCases(reviewer)).items).not.toContainEqual(
+        expect.objectContaining({ caseId: mismatched.id }),
+      );
+      await expect(service.getBureauCase(reviewer, mismatched.id)).rejects.toMatchObject({
+        code: 'not_found',
+      });
+      await expect(
+        service.decideBureauCase(reviewer, mismatched.id, {
+          expectedVersion: 2,
+          decision: 'approve',
+          reason: 'Mismatched route binding must fail closed.',
+        }),
+      ).rejects.toMatchObject({ code: 'not_found' });
+    }
+    await expect(service.getBureauCase(fixture.reviewer, randomUUID())).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 
   it('requires the active provider edit grant for changes after admission', async () => {
@@ -1028,6 +1196,40 @@ async function grant(
   }
 }
 
+async function grantInExistingMembership(
+  actor: RegistryActor,
+  organizationId: string,
+  scopeUnitId: string,
+  capabilities: string[],
+): Promise<void> {
+  const profile = await profileId(actor);
+  const [membership] = await client.unsafe<{ id: string }[]>(
+    `SELECT id FROM memberships WHERE user_profile_id = $1 AND organization_id = $2`,
+    [profile, organizationId],
+  );
+  if (!membership) throw new Error('Synthetic fixture membership was not found.');
+  for (const capability of capabilities) {
+    let [grantRow] = await client.unsafe<{ id: string }[]>(
+      `SELECT id FROM access_grants
+       WHERE membership_id = $1 AND capability = $2 AND organization_id = $3`,
+      [membership.id, capability, organizationId],
+    );
+    if (!grantRow) {
+      [grantRow] = await client.unsafe<{ id: string }[]>(
+        `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
+         VALUES ($1, $2, $3, true, false) RETURNING id`,
+        [membership.id, capability, organizationId],
+      );
+    }
+    if (!grantRow) throw new Error('Synthetic scoped grant insert returned no row.');
+    await client.unsafe(
+      `INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants)
+       VALUES ($1, $2, false)`,
+      [grantRow.id, scopeUnitId],
+    );
+  }
+}
+
 async function getCaseId(applicationId: string): Promise<string> {
   const [row] = await client.unsafe<{ id: string }[]>(
     `SELECT id FROM hotel_bureau_cases WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1`,
@@ -1037,9 +1239,9 @@ async function getCaseId(applicationId: string): Promise<string> {
   return row.id;
 }
 
-function content() {
+function content(administrativeUnitId = selectedUnitId) {
   return {
-    administrativeUnitId: selectedUnitId,
+    administrativeUnitId,
     claimedHotelName: `Synthetic test lodging ${randomUUID().slice(0, 8)}`,
     applicantNotes: 'Synthetic-only content.',
   };

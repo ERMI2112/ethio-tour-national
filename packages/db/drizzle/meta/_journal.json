@@ -29,6 +29,13 @@
       "when": 1792571961050,
       "tag": "0003_hotel_multi_office",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792572021050,
+      "tag": "0004_hotel_case_assignment_immutable",
+      "breakpoints": true
     }
   ]
 }

@@ -58,6 +58,7 @@ const mockApplication = (
   admissionStatus: 'pending',
   currentVersion: 3,
   currentVersionId: 'revision-3',
+  admittedVersion: null,
   content: { claimedHotelName: 'Synthetic sample hotel', applicantNotes: 'Sample notes' },
   location: null,
   bureauDecision: {
@@ -67,6 +68,8 @@ const mockApplication = (
     decidedAt: '2026-10-20T10:00:00.000Z',
   },
   admissionDecision: null,
+  historicalBureauDecisions: [],
+  historicalAdmissionDecisions: [],
   workspaceAccess: 'not_admitted',
   notice:
     'Synthetic pilot review result; not a license or proof of authority to represent a hotel.',
@@ -82,6 +85,7 @@ const mockAdmittedApplication = (
     status: 'approved',
     admissionStatus: 'admitted',
     workspaceAccess: 'private_only',
+    admittedVersion: 3,
     admissionDecision: {
       decision: 'admit',
       applicationVersion: 3,
@@ -550,6 +554,62 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
     expect(screen.queryByText('Confirmed Admitted Workspace')).toBeNull();
   });
 
+  it('labels old decisions and retained workspace access by the version they cover', async () => {
+    const resubmitted = mockAdmittedApplication({
+      status: 'submitted',
+      currentVersion: 4,
+      currentVersionId: 'revision-4',
+      admittedVersion: 3,
+      content: {
+        claimedHotelName: 'Synthetic changed-location hotel',
+        applicantNotes: 'New submitted location',
+        administrativeUnitId: locations[1].id,
+      },
+      location: locations[1],
+      bureauDecision: null,
+      admissionDecision: null,
+      historicalBureauDecisions: [
+        {
+          decision: 'approve',
+          applicationVersion: 3,
+          reason: 'Prior version review',
+          decidedAt: '2026-10-20T10:00:00.000Z',
+        },
+      ],
+      historicalAdmissionDecisions: [
+        {
+          decision: 'admit',
+          applicationVersion: 3,
+          reason: 'Prior private admission',
+          decidedAt: '2026-10-20T11:00:00.000Z',
+        },
+      ],
+    });
+    mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [resubmitted] });
+    mockApiClient.getAdmittedHotelWorkspace.mockResolvedValueOnce(resubmitted);
+
+    render(
+      <HotelPilotSessionProvider accessToken={token}>
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    expect(await screen.findByText('Bureau approve · submitted version 3')).toBeDefined();
+    expect(screen.getByText('Administrator admit · submitted version 3')).toBeDefined();
+    expect(screen.getByText('These decisions apply only to the versions shown.')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'View admitted workspace' }));
+
+    expect(
+      await screen.findByText(
+        'Current application version 4 is separate. Earlier Bureau and Administrator decisions do not approve this version.',
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByText(/Private workspace admission was recorded for submitted version 3/),
+    ).toBeDefined();
+    expect(screen.queryByText('Admitted version 4')).toBeNull();
+  });
+
   it('displays error message when admitted-workspace read path fails', async () => {
     const admittedApp = mockAdmittedApplication();
 
@@ -577,7 +637,30 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
   });
 
   it('loads direct admitted workspace page for authenticated user', async () => {
-    const admittedApp = mockAdmittedApplication();
+    const admittedApp = mockAdmittedApplication({
+      status: 'submitted',
+      currentVersion: 4,
+      currentVersionId: 'revision-4',
+      admittedVersion: 3,
+      bureauDecision: null,
+      admissionDecision: null,
+      historicalBureauDecisions: [
+        {
+          decision: 'approve',
+          applicationVersion: 3,
+          reason: 'Prior version review',
+          decidedAt: '2026-10-20T10:00:00.000Z',
+        },
+      ],
+      historicalAdmissionDecisions: [
+        {
+          decision: 'admit',
+          applicationVersion: 3,
+          reason: 'Prior private admission',
+          decidedAt: '2026-10-20T11:00:00.000Z',
+        },
+      ],
+    });
     mockApiClient.getAdmittedHotelWorkspace.mockResolvedValueOnce(admittedApp);
 
     render(
@@ -592,8 +675,13 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
       });
     });
 
+    const workspaceCard = await screen.findByRole('article', { name: 'Admitted hotel workspace' });
     await waitFor(() => {
-      expect(screen.getByText('Administrator pilot admission approved')).toBeDefined();
+      expect(workspaceCard.textContent).toContain('Admission recorded for submitted version: 3');
+      expect(workspaceCard.textContent).toContain(
+        'Current version 4 is a separate submission; earlier decisions do not approve it.',
+      );
+      expect(workspaceCard.textContent).toContain('Bureau approve · submitted version 3');
     });
   });
 });

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { HotelLocationDetails } from '../../../components/hotel-location';
+import { HotelDecisionHistory } from '../../../components/hotel-decision-history';
 import { getAdmittedHotelWorkspace } from '@ethio-tour/api-client';
 import {
   HotelPilotFrame,
@@ -80,7 +81,7 @@ export default function AdmittedHotelWorkspacePage({
             <article className="application-card" aria-label="Admitted hotel workspace">
               <div className="card-topline">
                 <div>
-                  <p className="eyebrow">Admitted version {workspace.currentVersion}</p>
+                  <p className="eyebrow">Current application version {workspace.currentVersion}</p>
                   <h3>{workspace.content.claimedHotelName}</h3>
                 </div>
                 <span className="status status-neutral">Private Workspace</span>
@@ -99,18 +100,38 @@ export default function AdmittedHotelWorkspacePage({
                   <strong>Administrator admission:</strong>{' '}
                   {workspace.admissionStatus.replaceAll('_', ' ')}
                 </p>
+                <p>
+                  <strong>Admission recorded for submitted version:</strong>{' '}
+                  {workspace.admittedVersion ?? 'not recorded'}
+                </p>
+                {workspace.admittedVersion !== null &&
+                  workspace.admittedVersion !== workspace.currentVersion && (
+                    <p className="notice" role="note">
+                      Private workspace access remains available from version{' '}
+                      {workspace.admittedVersion}. Current version {workspace.currentVersion} is a
+                      separate submission; earlier decisions do not approve it.
+                    </p>
+                  )}
                 {workspace.admissionDecision && (
                   <p>
-                    <strong>Admission reason:</strong> {workspace.admissionDecision.reason}
+                    <strong>
+                      Administrator decision for submitted version{' '}
+                      {workspace.admissionDecision.applicationVersion}:
+                    </strong>{' '}
+                    {workspace.admissionDecision.reason}
                   </p>
                 )}
                 {workspace.bureauDecision && (
                   <p>
-                    <strong>Bureau review outcome:</strong>{' '}
+                    <strong>
+                      Bureau outcome for submitted version{' '}
+                      {workspace.bureauDecision.applicationVersion}:{' '}
+                    </strong>{' '}
                     {workspace.bureauDecision.decision.replaceAll('_', ' ')} (
                     {workspace.bureauDecision.reason})
                   </p>
                 )}
+                <HotelDecisionHistory application={workspace} />
               </div>
               <div className="action-row" style={{ marginTop: '16px' }}>
                 <button

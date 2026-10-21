@@ -146,7 +146,9 @@ function BureauCaseCard({
       <p className="muted">{caseItem.notice}</p>
       {caseItem.bureauDecision && (
         <p className="muted">
-          Current recorded outcome: {caseItem.bureauDecision.decision.replaceAll('_', ' ')}
+          Current recorded outcome for submitted version{' '}
+          {caseItem.bureauDecision.applicationVersion}:{' '}
+          {caseItem.bureauDecision.decision.replaceAll('_', ' ')}
         </p>
       )}
       {canDecideBureauCase(caseItem) ? (

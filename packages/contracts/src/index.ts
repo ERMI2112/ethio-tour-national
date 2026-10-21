@@ -177,10 +177,15 @@ export interface HotelApplicationResponse {
   admissionStatus: HotelAdmissionStatus;
   currentVersion: number;
   currentVersionId: string | null;
+  /** Version with an Administrator admission decision; does not imply the current version is approved. */
+  admittedVersion: number | null;
   content: HotelApplicationContent;
   location: HotelLocation | null;
   bureauDecision: HotelBureauDecisionSummary | null;
   admissionDecision: HotelAdmissionDecisionSummary | null;
+  /** Earlier decisions, returned only to the profile that owns the application. */
+  historicalBureauDecisions: HotelBureauDecisionSummary[];
+  historicalAdmissionDecisions: HotelAdmissionDecisionSummary[];
   workspaceAccess: 'not_admitted' | 'private_only';
   notice: 'Synthetic pilot review result; not a license or proof of authority to represent a hotel.';
   version: number;

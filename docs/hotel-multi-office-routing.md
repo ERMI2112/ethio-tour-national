@@ -24,6 +24,14 @@ All endpoints require a real Keycloak bearer token; browsers use
   For a submitted version this is its stored immutable hierarchy snapshot,
   not a lookup of today's labels. Drafts show their selected current directory
   location when available. This field contains no internal office assignment.
+- `bureauDecision` and `admissionDecision` describe decisions for the current
+  submitted version only. Applicant-owned responses also include
+  `historicalBureauDecisions` and `historicalAdmissionDecisions`; each item names
+  its submitted version. These history arrays are empty in Bureau and
+  Administrator responses so an office does not receive another office's
+  historical decision reasons. `admittedVersion` identifies the version that
+  received private Administrator admission; it is not an approval of a newer
+  version.
 - `POST /api/hotels/applications/:id/submit` still accepts only
   `{ expectedVersion }`; the browser never supplies routing authority.
   Unavailable, inactive or ambiguous routing returns 503 without committing
@@ -72,14 +80,23 @@ is introduced. Ancestors are resolved server-side for descendant-scoped grants;
 capability, assigned office, active membership and geography must be satisfied
 by one grant, never combined from separate grants.
 
+The case's application/version/office/scope binding is immutable after insert.
+Every Bureau queue, detail, and decision query, as well as Administrator
+eligibility, requires the case office and scope to equal the referenced version's
+recorded office and scope. A mismatched case is excluded and reads/decisions fail
+closed.
+
 Migration 0002 remains unchanged. The additive migration introduces nullable
 version metadata so existing immutable versions need no update and existing
 whole-version immutability remains enforced. No legacy location is invented.
 Location-less drafts can still be read/saved, but must select a valid location
-before another submission. Already-submitted cases, decisions and admissions
-retain their original saved assignment and history even if current routing changes.
-Existing admitted private access remains; a new version needs new Bureau review.
-No historical approval is reinterpreted as approval of newly supplied geography.
+before another submission. Historical case rows and decisions remain stored.
+Legacy cases whose immutable version has no recorded route metadata, and any
+case/version routing mismatch, cannot enter queues, be read, or be decided; no
+assignment is inferred or backfilled. Existing admitted owners keep private
+workspace access, while a new version is routed and reviewed independently.
+Applicant responses label historical decisions with their exact version; an
+older Bureau approval or admission never approves newly supplied geography.
 
 ## Decisions Still Outside This Slice
 

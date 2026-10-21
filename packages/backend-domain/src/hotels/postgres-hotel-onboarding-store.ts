@@ -67,6 +67,40 @@ const applicationSelect = `
             AND admission_decision.application_version_id = application.current_submitted_version_id
           ORDER BY decided_version.version_number DESC, admission_decision.created_at DESC
           LIMIT 1) AS admission_decision,
+         (SELECT decided_version.version_number
+          FROM hotel_admission_decisions admission_decision
+          JOIN hotel_application_versions decided_version
+            ON decided_version.id = admission_decision.application_version_id
+          WHERE admission_decision.application_id = application.id
+            AND admission_decision.decision = 'admit'
+          ORDER BY admission_decision.created_at DESC LIMIT 1) AS admitted_version,
+         COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'decision', bureau_decision.decision,
+             'applicationVersion', decided_version.version_number,
+             'reason', bureau_decision.reason,
+             'decidedAt', bureau_decision.created_at
+           ) ORDER BY decided_version.version_number DESC, bureau_decision.created_at DESC)
+           FROM hotel_bureau_cases bureau_case
+           JOIN hotel_bureau_decisions bureau_decision ON bureau_decision.case_id = bureau_case.id
+           JOIN hotel_application_versions decided_version
+             ON decided_version.id = bureau_case.application_version_id
+           WHERE bureau_case.application_id = application.id
+             AND bureau_case.application_version_id IS DISTINCT FROM application.current_submitted_version_id
+         ), '[]'::jsonb) AS historical_bureau_decisions,
+         COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'decision', admission_decision.decision,
+             'applicationVersion', decided_version.version_number,
+             'reason', admission_decision.reason,
+             'decidedAt', admission_decision.created_at
+           ) ORDER BY decided_version.version_number DESC, admission_decision.created_at DESC)
+           FROM hotel_admission_decisions admission_decision
+           JOIN hotel_application_versions decided_version
+             ON decided_version.id = admission_decision.application_version_id
+           WHERE admission_decision.application_id = application.id
+             AND admission_decision.application_version_id IS DISTINCT FROM application.current_submitted_version_id
+         ), '[]'::jsonb) AS historical_admission_decisions,
          current_version.id AS response_version_id
   FROM hotel_applications application
   LEFT JOIN hotel_application_versions current_version
@@ -131,8 +165,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     return locations.filter((item): item is HotelLocation => item !== null);
   }
 
-  private async toResponse(row: Row): Promise<HotelApplicationResponse> {
-    const response = toApplicationResponse(row);
+  private async toResponse(
+    row: Row,
+    includeDecisionHistory = false,
+  ): Promise<HotelApplicationResponse> {
+    const response = toApplicationResponse(row, includeDecisionHistory);
     if (row.status === 'draft' && response.content.administrativeUnitId) {
       const [enabled] = await this.sql.unsafe<Row[]>(
         `SELECT administrative_unit_id FROM hotel_locations WHERE administrative_unit_id = $1 AND enabled = true`,
@@ -247,7 +284,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `${applicationSelect} WHERE application.applicant_profile_id = $1 ORDER BY application.updated_at DESC, application.id`,
       [profileId],
     );
-    return Promise.all(rows.map((row) => this.toResponse(row)));
+    return Promise.all(rows.map((row) => this.toResponse(row, true)));
   }
 
   async getOwnedApplication(
@@ -260,7 +297,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `${applicationSelect} WHERE application.id = $1 AND application.applicant_profile_id = $2`,
       [applicationId, profileId],
     );
-    return row ? this.toResponse(row) : null;
+    return row ? this.toResponse(row, true) : null;
   }
 
   async updateDraft(
@@ -300,7 +337,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
         expectedVersion,
       },
     );
-    return this.loadApplication(applicationId);
+    return this.loadApplication(applicationId, true);
   }
 
   async submitApplication(
@@ -394,7 +431,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
         bureauRoute: route.organizationId,
       },
     );
-    return this.loadApplication(applicationId);
+    return this.loadApplication(applicationId, true);
   }
 
   async getBureauDecisionTarget(caseId: string): Promise<HotelDecisionTarget | null> {
@@ -404,6 +441,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
               bureau_org.organization_type, scope_unit.is_synthetic AS unit_synthetic,
               application.is_synthetic
        FROM hotel_bureau_cases bureau_case
+       JOIN hotel_application_versions version
+         ON version.id = bureau_case.application_version_id
+        AND version.application_id = bureau_case.application_id
+        AND version.bureau_organization_id = bureau_case.bureau_organization_id
+        AND version.scope_unit_id = bureau_case.scope_unit_id
        JOIN organizations bureau_org ON bureau_org.id = bureau_case.bureau_organization_id
        JOIN administrative_units scope_unit ON scope_unit.id = bureau_case.scope_unit_id
        JOIN hotel_applications application ON application.id = bureau_case.application_id
@@ -428,6 +470,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `SELECT bureau_case.id AS case_id, bureau_case.status AS case_status, application.id AS application_id
        FROM hotel_bureau_cases bureau_case
        JOIN hotel_applications application ON application.id = bureau_case.application_id
+       JOIN hotel_application_versions version
+         ON version.id = bureau_case.application_version_id
+        AND version.application_id = bureau_case.application_id
+        AND version.bureau_organization_id = bureau_case.bureau_organization_id
+        AND version.scope_unit_id = bureau_case.scope_unit_id
        WHERE bureau_case.status IN ('submitted', 'in_review')
          AND application.status = 'submitted'
          AND application.current_submitted_version_id = bureau_case.application_version_id
@@ -464,6 +511,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `${applicationSelect}
        JOIN hotel_bureau_cases bureau_case ON bureau_case.application_id = application.id
         AND bureau_case.application_version_id = application.current_submitted_version_id
+       JOIN hotel_application_versions version
+         ON version.id = bureau_case.application_version_id
+        AND version.application_id = bureau_case.application_id
+        AND version.bureau_organization_id = bureau_case.bureau_organization_id
+        AND version.scope_unit_id = bureau_case.scope_unit_id
        WHERE bureau_case.id = $1 AND application.status <> 'draft'`,
       [caseId],
     );
@@ -495,7 +547,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
               bureau_org.is_synthetic AS organization_synthetic,
               bureau_org.organization_type, bureau_unit.is_synthetic AS unit_synthetic
        FROM hotel_bureau_cases bureau_case
-       JOIN hotel_application_versions version ON version.id = bureau_case.application_version_id
+       JOIN hotel_application_versions version
+         ON version.id = bureau_case.application_version_id
+        AND version.application_id = bureau_case.application_id
+        AND version.bureau_organization_id = bureau_case.bureau_organization_id
+        AND version.scope_unit_id = bureau_case.scope_unit_id
        JOIN hotel_applications application ON application.id = bureau_case.application_id
        JOIN organizations bureau_org ON bureau_org.id = bureau_case.bureau_organization_id
        JOIN administrative_units bureau_unit ON bureau_unit.id = bureau_case.scope_unit_id
@@ -605,6 +661,8 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
        JOIN hotel_application_versions version ON version.id = application.current_submitted_version_id
        JOIN hotel_bureau_cases bureau_case
          ON bureau_case.application_version_id = version.id AND bureau_case.application_id = application.id
+        AND bureau_case.bureau_organization_id = version.bureau_organization_id
+        AND bureau_case.scope_unit_id = version.scope_unit_id
        JOIN hotel_bureau_decisions bureau_decision
          ON bureau_decision.case_id = bureau_case.id AND bureau_decision.decision = 'approve'
        JOIN organizations bureau_org ON bureau_org.id = bureau_case.bureau_organization_id AND bureau_org.is_synthetic = true AND bureau_org.organization_type = 'administrative'
@@ -632,6 +690,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
        JOIN hotel_bureau_cases bureau_case
          ON bureau_case.application_id = application.id
         AND bureau_case.application_version_id = application.current_submitted_version_id
+       JOIN hotel_application_versions version
+         ON version.id = bureau_case.application_version_id
+        AND version.application_id = bureau_case.application_id
+        AND version.bureau_organization_id = bureau_case.bureau_organization_id
+        AND version.scope_unit_id = bureau_case.scope_unit_id
        JOIN hotel_bureau_decisions bureau_decision
          ON bureau_decision.case_id = bureau_case.id AND bureau_decision.decision = 'approve'
        JOIN organizations bureau_org ON bureau_org.id = bureau_case.bureau_organization_id AND bureau_org.is_synthetic = true AND bureau_org.organization_type = 'administrative'
@@ -674,6 +737,11 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `SELECT bureau_decision.reviewer_profile_id
        FROM hotel_bureau_cases bureau_case
        JOIN hotel_bureau_decisions bureau_decision ON bureau_decision.case_id = bureau_case.id
+       JOIN hotel_application_versions version
+         ON version.id = bureau_case.application_version_id
+        AND version.application_id = bureau_case.application_id
+        AND version.bureau_organization_id = bureau_case.bureau_organization_id
+        AND version.scope_unit_id = bureau_case.scope_unit_id
        WHERE bureau_case.application_id = $1 AND bureau_case.application_version_id = $2
          AND bureau_decision.decision = 'approve'`,
       [applicationId, versionId],
@@ -786,7 +854,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
          AND application.provider_organization_id = provider.id`,
       [applicationId, profileId],
     );
-    return row ? this.loadApplication(applicationId) : null;
+    return row ? this.loadApplication(applicationId, true) : null;
   }
 
   async appendDenial(
@@ -865,11 +933,14 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     return row ?? null;
   }
 
-  private async loadApplication(applicationId: string): Promise<HotelApplicationResponse | null> {
+  private async loadApplication(
+    applicationId: string,
+    includeDecisionHistory = false,
+  ): Promise<HotelApplicationResponse | null> {
     const [row] = await this.sql.unsafe<Row[]>(`${applicationSelect} WHERE application.id = $1`, [
       applicationId,
     ]);
-    return row ? this.toResponse(row) : null;
+    return row ? this.toResponse(row, includeDecisionHistory) : null;
   }
 
   private async getConfiguredAdmissionRoute(organizationId: string): Promise<boolean> {
@@ -927,7 +998,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
   }
 }
 
-function toApplicationResponse(row: Row): HotelApplicationResponse {
+function toApplicationResponse(row: Row, includeDecisionHistory = false): HotelApplicationResponse {
   return {
     id: stringValue(row.id),
     status: stringValue(row.status) as HotelApplicationResponse['status'],
@@ -936,6 +1007,10 @@ function toApplicationResponse(row: Row): HotelApplicationResponse {
     ) as HotelApplicationResponse['admissionStatus'],
     currentVersion: Number(row.current_version_number),
     currentVersionId: nullableString(row.response_version_id),
+    admittedVersion:
+      row.admitted_version === null || row.admitted_version === undefined
+        ? null
+        : Number(row.admitted_version),
     content: jsonValue(row.response_content) as HotelApplicationContent,
     location:
       row.status === 'draft'
@@ -943,10 +1018,22 @@ function toApplicationResponse(row: Row): HotelApplicationResponse {
         : ((jsonValue(row.location_snapshot) as HotelLocation | null) ?? null),
     bureauDecision: bureauDecision(row.bureau_decision),
     admissionDecision: admissionDecision(row.admission_decision),
+    historicalBureauDecisions: includeDecisionHistory
+      ? decisionList(row.historical_bureau_decisions, bureauDecision)
+      : [],
+    historicalAdmissionDecisions: includeDecisionHistory
+      ? decisionList(row.historical_admission_decisions, admissionDecision)
+      : [],
     workspaceAccess: row.admission_status === 'admitted' ? 'private_only' : 'not_admitted',
     notice: PUBLIC_NOTICE,
     version: Number(row.version),
   };
+}
+
+function decisionList<T>(value: unknown, parse: (item: unknown) => T | null): T[] {
+  const parsed = value === null || value === undefined ? [] : jsonValue(value);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(parse).filter((item): item is T => item !== null);
 }
 
 function parseDecision(value: unknown): Record<string, unknown> | null {
