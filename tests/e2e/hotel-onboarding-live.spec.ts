@@ -3,12 +3,18 @@ import {
   test,
   type APIResponse,
   type Browser,
+  type Locator,
   type Page,
   type Response,
 } from '@playwright/test';
 import type { HotelE2eIdentity } from './hotel-onboarding-support';
 import { hotelE2eConfig } from './hotel-onboarding-support';
-import type { HotelBureauCaseResponse, HotelLocation } from '../../packages/contracts/src/index';
+import type {
+  HotelApplicationResponse,
+  HotelBureauCaseResponse,
+  HotelLocationSearchResponse,
+  HotelLocationSelection,
+} from '../../packages/contracts/src/index';
 
 interface SignedInActor {
   page: Page;
@@ -215,6 +221,56 @@ async function expectStatus(
   expect(response.status(), assertion).toBe(status);
 }
 
+function formatSubmittedLocation(location: HotelApplicationResponse['location']): string {
+  if (!location) throw new Error('The application response did not include its location snapshot.');
+  return location.hierarchy
+    .map((node) => ('displayName' in node ? node.displayName : node.label))
+    .join(' / ');
+}
+
+async function chooseSyntheticLocation(
+  page: Page,
+  form: Locator,
+  query: string,
+): Promise<{ selection: HotelLocationSelection; path: string }> {
+  await form.getByLabel('Search locations').fill(query);
+  const searchResponsePromise = page.waitForResponse((response) => {
+    if (response.request().method() !== 'GET') return false;
+    try {
+      const url = new URL(response.url());
+      return (
+        url.pathname.endsWith('/api/hotels/locations') && url.searchParams.get('query') === query
+      );
+    } catch {
+      return false;
+    }
+  });
+  await form.getByRole('button', { name: 'Search', exact: true }).click();
+  const response = await searchResponsePromise;
+  await expectStatus(response, 200, 'Authenticated location search');
+  const directory = (await response.json()) as HotelLocationSearchResponse;
+  const result = directory.items.find((item) =>
+    item.hierarchy.some((node) => node.displayName.toLowerCase().includes(query.toLowerCase())),
+  );
+  if (!result) {
+    throw new Error(`The disposable synthetic directory has no result matching ${query}.`);
+  }
+  const path = result.hierarchy.map((node) => node.displayName).join(' / ');
+  await form.getByLabel('Choose a location').selectOption(result.unitId);
+  await expect(form.getByLabel('Location preview')).toContainText(path);
+  await expect(form.getByLabel('Location preview')).toContainText(
+    'Applicant-declared location — unverified.',
+  );
+  return {
+    selection: {
+      geographyReleaseId: directory.directoryRelease.id,
+      unitId: result.unitId,
+      unitRevisionId: result.unitRevisionId,
+    },
+    path,
+  };
+}
+
 async function expectPrivateBodyDoesNotContain(
   response: APIResponse,
   privateMarker: string,
@@ -233,9 +289,6 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
   const hotelName = `Synthetic E2E hotel ${uniqueSuffix}`;
   const applicantNotes = `Synthetic acceptance-only application ${uniqueSuffix}`;
   const hotelNameB = `Synthetic E2E hotel B ${uniqueSuffix}`;
-  const locationAId = 'demo-unit-woreda-gondar';
-  const locationBId = 'demo-unit-woreda-lalibela';
-
   try {
     const applicant = await signInThroughKeycloak(
       browser,
@@ -260,11 +313,7 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
     const newApplicationForm = applicant.page.getByRole('region', { name: 'Start an application' });
     await newApplicationForm.getByLabel('Hotel name stated in this application').fill(hotelName);
     await newApplicationForm.getByLabel('Application notes').fill(applicantNotes);
-    await expect(newApplicationForm.getByLabel('Hotel location')).toBeEnabled();
-    await newApplicationForm.getByLabel('Hotel location').selectOption(locationAId);
-    await expect(newApplicationForm.getByLabel('Location preview')).toContainText(
-      'Applicant-provided',
-    );
+    const locationA = await chooseSyntheticLocation(applicant.page, newApplicationForm, 'gondar');
     await expectUiApiResponse(applicant.apiResponses, 'GET', 'hotels/locations', 200);
     const createResponsePromise = applicant.page.waitForResponse(
       (response) =>
@@ -278,6 +327,9 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
     if (typeof created.id !== 'string' || !created.id || created.status !== 'draft') {
       throw new Error('The API did not return the expected private draft contract.');
     }
+    expect(createResponse.request().postDataJSON()).toMatchObject({
+      content: { locationSelection: locationA.selection },
+    });
     await expectUiApiResponse(applicant.apiResponses, 'POST', 'hotels/applications', 201);
     await expect(applicant.page.getByRole('heading', { name: hotelName })).toBeVisible();
 
@@ -291,6 +343,10 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
       'profileId',
       'membershipId',
       'providerOrganizationId',
+      'assignment',
+      'routingReleaseId',
+      'routingRuleId',
+      'scopeUnitId',
     ]) {
       if (privateField in ownerProjection) {
         throw new Error(
@@ -334,9 +390,10 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
 
     const submittedARead = await authenticatedGet(applicant, applicationRoute);
     await expectStatus(submittedARead, 200, 'Applicant reads submitted A');
-    const submittedA = (await submittedARead.json()) as { location: HotelLocation };
-    expect(submittedA.location.id).toBe(locationAId);
-    const hierarchyA = submittedA.location.hierarchy.map((node) => node.label).join(' / ');
+    const submittedA = (await submittedARead.json()) as HotelApplicationResponse;
+    expect(submittedA.locationState).toBe('submitted_snapshot');
+    expect(submittedA.content.locationSelection).toEqual(locationA.selection);
+    const hierarchyA = formatSubmittedLocation(submittedA.location);
     await expect(
       applicant.page
         .locator('article.application-card')
@@ -348,7 +405,7 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
     await newApplicationForm
       .getByLabel('Application notes')
       .fill(`Synthetic second-office application ${uniqueSuffix}`);
-    await newApplicationForm.getByLabel('Hotel location').selectOption(locationBId);
+    const locationB = await chooseSyntheticLocation(applicant.page, newApplicationForm, 'lalibela');
     const createBPromise = applicant.page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
@@ -370,9 +427,10 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
     await expectStatus(await submitBPromise, 201, 'Applicant submits office B draft');
     const submittedBRead = await authenticatedGet(applicant, `hotels/applications/${createdB.id}`);
     await expectStatus(submittedBRead, 200, 'Applicant reads submitted B');
-    const submittedB = (await submittedBRead.json()) as { location: HotelLocation };
-    expect(submittedB.location.id).toBe(locationBId);
-    const hierarchyB = submittedB.location.hierarchy.map((node) => node.label).join(' / ');
+    const submittedB = (await submittedBRead.json()) as HotelApplicationResponse;
+    expect(submittedB.locationState).toBe('submitted_snapshot');
+    expect(submittedB.content.locationSelection).toEqual(locationB.selection);
+    const hierarchyB = formatSubmittedLocation(submittedB.location);
 
     const bureau = await signInThroughKeycloak(
       browser,
@@ -672,18 +730,18 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
     await expect(reauthenticatedApplicant.page.getByLabel('Submitted location')).toContainText(
       hierarchyB,
     );
-    for (const [id, location] of [
-      [created.id, submittedA.location],
-      [createdB.id, submittedB.location],
+    for (const [id, expectedLocationPath] of [
+      [created.id, hierarchyA],
+      [createdB.id, hierarchyB],
     ] as const) {
       const admittedRead = await authenticatedGet(
         reauthenticatedApplicant,
         `hotels/workspace/${id}`,
       );
       await expectStatus(admittedRead, 200, 'Admitted location snapshot remains available');
-      expect(((await admittedRead.json()) as { location: HotelLocation }).location).toEqual(
-        location,
-      );
+      const admittedProjection = (await admittedRead.json()) as HotelApplicationResponse;
+      expect(admittedProjection.locationState).toBe('submitted_snapshot');
+      expect(formatSubmittedLocation(admittedProjection.location)).toBe(expectedLocationPath);
       for (const nonOwner of [bureau, bureauB, administrator]) {
         const denied = await authenticatedGet(nonOwner, `hotels/workspace/${id}`);
         await expectStatus(denied, 404, 'Admitted workspace remains private across both offices');

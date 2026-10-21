@@ -3,8 +3,14 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { HotelLocation } from '@ethio-tour/contracts';
+import type {
+  HotelLocation,
+  HotelLocationSearchResponse,
+  HotelLocationSearchResult,
+  HotelLocationSelection,
+} from '@ethio-tour/contracts';
 import { HotelApplicantScreen } from './hotels/applicant-screen';
+import { HotelLocationSelector } from './components/hotel-location';
 import { BureauHotelCasesScreen } from './bureau/hotel-cases/screen';
 import { AdminHotelAdmissionsScreen } from './admin/hotel-admissions/screen';
 import AdmittedHotelWorkspacePage from './hotels/workspace/[id]/page';
@@ -24,7 +30,7 @@ import { ApiClientError } from '@ethio-tour/api-client';
 const mockApiClient = vi.hoisted(() => ({
   API_UNAUTHORIZED_EVENT: 'ethio-tour:unauthorized',
   getMyHotelApplications: vi.fn(),
-  getHotelLocations: vi.fn(),
+  searchHotelLocations: vi.fn(),
   getHotelApplication: vi.fn(),
   createHotelApplication: vi.fn(),
   submitHotelApplication: vi.fn(),
@@ -61,6 +67,7 @@ const mockApplication = (
   admittedVersion: null,
   content: { claimedHotelName: 'Synthetic sample hotel', applicantNotes: 'Sample notes' },
   location: null,
+  locationState: 'unselected',
   bureauDecision: {
     decision: 'approve',
     applicationVersion: 3,
@@ -100,8 +107,23 @@ const mockBureauCase = (
   overrides: Partial<HotelBureauCaseResponse> = {},
 ): HotelBureauCaseResponse => ({
   ...mockApplication({ status: 'submitted' }),
+  locationState: 'submitted_snapshot',
   caseId: 'case-1',
   caseStatus: 'in_review',
+  submittedLocation: {
+    geographyReleaseId: directoryRelease.id,
+    unitId: searchResults[0]!.unitId,
+    unitRevisionId: searchResults[0]!.unitRevisionId,
+    unitType: searchResults[0]!.unitType,
+    displayName: searchResults[0]!.displayName,
+    hierarchy: searchResults[0]!.hierarchy,
+  },
+  assignment: {
+    routingReleaseId: 'synthetic-routing-a',
+    routingRuleId: 'synthetic-route-rule-a',
+    organizationId: 'demo-org-hotel-bureau',
+    scopeUnitId: searchResults[0]!.unitId,
+  },
   ...overrides,
 });
 
@@ -119,8 +141,49 @@ const locations: [HotelLocation, HotelLocation] = [
   makeLocation('lalibela'),
 ];
 
+const directoryRelease = {
+  id: 'synthetic-geography-a',
+  sourceEdition: 'synthetic-fixture-v1',
+  effectiveFrom: null,
+  synthetic: true,
+};
+
+const searchResults: HotelLocationSearchResult[] = locations.map((location, index) => ({
+  unitId: location.id,
+  unitRevisionId: `synthetic-revision-${index + 1}`,
+  unitType: index === 0 ? 'demo-locality' : 'demo-town',
+  displayName: location.label,
+  hierarchy: location.hierarchy.map((node, nodeIndex) => ({
+    unitId: node.id,
+    unitRevisionId: `synthetic-parent-revision-${index + 1}-${nodeIndex + 1}`,
+    unitType: nodeIndex === 0 ? 'demo-area' : index === 0 ? 'demo-locality' : 'demo-town',
+    displayName: node.label,
+  })),
+  matchedName: { value: location.label, language: 'en', script: 'Latn' },
+}));
+
+const locationSelections: [HotelLocationSelection, HotelLocationSelection] = searchResults.map(
+  (result) => ({
+    geographyReleaseId: directoryRelease.id,
+    unitId: result.unitId,
+    unitRevisionId: result.unitRevisionId,
+  }),
+) as [HotelLocationSelection, HotelLocationSelection];
+
+function mockSearchResponse(
+  items = searchResults,
+  overrides: Partial<HotelLocationSearchResponse> = {},
+): HotelLocationSearchResponse {
+  return {
+    directoryRelease,
+    items,
+    nextCursor: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
-  mockApiClient.getHotelLocations.mockReset().mockResolvedValue({ items: locations });
+  mockApiClient.searchHotelLocations.mockReset().mockResolvedValue(mockSearchResponse());
 });
 
 describe('hotel pilot screens - signed out state', () => {
@@ -146,7 +209,7 @@ describe('hotel pilot screens - signed out state', () => {
     }
 
     expect(mockApiClient.getMyHotelApplications).not.toHaveBeenCalled();
-    expect(mockApiClient.getHotelLocations).not.toHaveBeenCalled();
+    expect(mockApiClient.searchHotelLocations).not.toHaveBeenCalled();
     expect(mockApiClient.getBureauHotelCases).not.toHaveBeenCalled();
     expect(mockApiClient.getHotelAdmissionQueue).not.toHaveBeenCalled();
     expect(mockApiClient.getAdmittedHotelWorkspace).not.toHaveBeenCalled();
@@ -169,7 +232,120 @@ describe('hotel location selection, snapshots, and error retention', () => {
     vi.clearAllMocks();
     mockApiClient.getMyHotelApplications.mockReset().mockResolvedValue({ items: [] });
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    document.documentElement.lang = '';
+  });
+
+  it('searches with language and cursor and disambiguates duplicate names by full hierarchy', async () => {
+    const duplicateA: HotelLocationSearchResult = {
+      ...searchResults[0]!,
+      displayName: 'Synthetic Town',
+      unitId: 'town-a',
+      hierarchy: [
+        { ...searchResults[0]!.hierarchy[0]!, displayName: 'North demo area' },
+        { ...searchResults[0]!.hierarchy[1]!, unitId: 'town-a', displayName: 'Synthetic Town' },
+      ],
+    };
+    const duplicateB: HotelLocationSearchResult = {
+      ...searchResults[1]!,
+      displayName: 'Synthetic Town',
+      unitId: 'town-b',
+      hierarchy: [
+        { ...searchResults[1]!.hierarchy[0]!, displayName: 'South demo area' },
+        { ...searchResults[1]!.hierarchy[1]!, unitId: 'town-b', displayName: 'Synthetic Town' },
+      ],
+    };
+    const onChange = vi.fn();
+    const onValidity = vi.fn();
+    const originalLanguage = document.documentElement.lang;
+    document.documentElement.lang = 'am';
+    mockApiClient.searchHotelLocations
+      .mockResolvedValueOnce(mockSearchResponse())
+      .mockResolvedValueOnce(
+        mockSearchResponse([duplicateA, duplicateB], { nextCursor: 'next-page' }),
+      )
+      .mockResolvedValueOnce(mockSearchResponse([searchResults[0]!]));
+
+    render(
+      session(
+        <HotelLocationSelector
+          id="search-test"
+          accessToken="test-session"
+          value={null}
+          locationSnapshot={null}
+          onChange={onChange}
+          onSelectionValidityChange={onValidity}
+        />,
+      ),
+    );
+    await screen.findByText('2 locations shown.');
+    const search = screen.getByLabelText('Search locations');
+    fireEvent.change(search, { target: { value: 'town' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mockApiClient.searchHotelLocations).toHaveBeenCalledTimes(2));
+    expect(mockApiClient.searchHotelLocations).toHaveBeenLastCalledWith(
+      { query: 'town', language: 'am', limit: 20 },
+      { accessToken: 'test-session' },
+    );
+    const select = screen.getByLabelText('Choose a location') as HTMLSelectElement;
+    expect(select.options[1]?.textContent).toContain('North demo area / Synthetic Town');
+    expect(select.options[2]?.textContent).toContain('South demo area / Synthetic Town');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more locations' }));
+    await waitFor(() => expect(mockApiClient.searchHotelLocations).toHaveBeenCalledTimes(3));
+    expect(mockApiClient.searchHotelLocations).toHaveBeenLastCalledWith(
+      { query: 'town', language: 'am', limit: 20, cursor: 'next-page' },
+      { accessToken: 'test-session' },
+    );
+    document.documentElement.lang = originalLanguage;
+  });
+
+  it('keeps a stale server-reported selection invalid without mapping it to a new location', async () => {
+    const onValidity = vi.fn();
+    render(
+      session(
+        <HotelLocationSelector
+          id="stale-test"
+          accessToken="test-session"
+          value={{
+            geographyReleaseId: 'old-release',
+            unitId: locations[0].id,
+            unitRevisionId: 'old-unit-revision',
+          }}
+          locationSnapshot={locations[0]}
+          locationState="stale"
+          onChange={vi.fn()}
+          onSelectionValidityChange={onValidity}
+        />,
+      ),
+    );
+    expect(await screen.findByText(/Saved location is stale/)).toBeDefined();
+    expect(screen.getByRole('alert').textContent).toContain('saved unit revision differs');
+    await waitFor(() => expect(onValidity).toHaveBeenLastCalledWith(false));
+    expect((screen.getByLabelText('Choose a location') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('labels a legacy location snapshot and requires a fresh directory selection', async () => {
+    render(
+      session(
+        <HotelLocationSelector
+          id="legacy-test"
+          accessToken="test-session"
+          value={{
+            geographyReleaseId: 'legacy-release',
+            unitId: locations[0].id,
+            unitRevisionId: 'legacy-unit-revision',
+          }}
+          locationSnapshot={locations[0]}
+          locationState="legacy"
+          onChange={vi.fn()}
+          onSelectionValidityChange={vi.fn()}
+        />,
+      ),
+    );
+    expect(await screen.findByText(/Legacy location snapshot/)).toBeDefined();
+    expect(screen.getByRole('alert').textContent).toContain('legacy location is not a current');
+  });
 
   it('retains create inputs and selection after failure, retries, and resets only after success', async () => {
     mockApiClient.createHotelApplication
@@ -183,14 +359,14 @@ describe('hotel location selection, snapshots, and error retention', () => {
           content: {
             claimedHotelName: 'Entered hotel',
             applicantNotes: 'Entered notes',
-            administrativeUnitId: locations[0].id,
+            locationSelection: locationSelections[0],
           },
         }),
       );
     render(session(<HotelApplicantScreen />));
     const form = within(screen.getByRole('region', { name: 'Start an application' }));
     await waitFor(() =>
-      expect(form.getByLabelText('Hotel location').querySelectorAll('option')).toHaveLength(3),
+      expect(form.getByLabelText('Choose a location').querySelectorAll('option')).toHaveLength(3),
     );
     fireEvent.change(form.getByLabelText('Hotel name stated in this application'), {
       target: { value: 'Entered hotel' },
@@ -198,8 +374,12 @@ describe('hotel location selection, snapshots, and error retention', () => {
     fireEvent.change(form.getByLabelText('Application notes'), {
       target: { value: 'Entered notes' },
     });
-    fireEvent.change(form.getByLabelText('Hotel location'), { target: { value: locations[0].id } });
-    expect(form.getByLabelText('Location preview').textContent).toContain('Applicant-provided');
+    fireEvent.change(form.getByLabelText('Choose a location'), {
+      target: { value: locations[0].id },
+    });
+    expect(form.getByLabelText('Location preview').textContent).toContain(
+      'Applicant-declared location — unverified.',
+    );
     expect(form.getByLabelText('Location preview').textContent).toContain(
       'Synthetic region / Synthetic gondar',
     );
@@ -211,7 +391,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
     expect((form.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
       'Entered notes',
     );
-    expect((form.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(
+    expect((form.getByLabelText('Choose a location') as HTMLSelectElement).value).toBe(
       locations[0].id,
     );
     fireEvent.click(form.getByRole('button', { name: 'Create private draft' }));
@@ -221,13 +401,13 @@ describe('hotel location selection, snapshots, and error retention', () => {
         content: {
           claimedHotelName: 'Entered hotel',
           applicantNotes: 'Entered notes',
-          administrativeUnitId: locations[0].id,
+          locationSelection: locationSelections[0],
         },
       },
       { accessToken: 'test-session' },
     );
     await waitFor(() =>
-      expect((form.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(''),
+      expect((form.getByLabelText('Choose a location') as HTMLSelectElement).value).toBe(''),
     );
     expect(
       (form.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
@@ -235,9 +415,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
   });
 
   it('retries directory loading without clearing typed inputs and shows an empty directory honestly', async () => {
-    mockApiClient.getHotelLocations
+    mockApiClient.searchHotelLocations
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce({ items: [] });
+      .mockResolvedValueOnce(mockSearchResponse([]));
     render(session(<HotelApplicantScreen />));
     const form = within(screen.getByRole('region', { name: 'Start an application' }));
     fireEvent.change(form.getByLabelText('Application notes'), {
@@ -246,9 +426,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
     await waitFor(() =>
       expect(form.getByRole('alert').textContent).toContain('connection and retry'),
     );
-    fireEvent.click(form.getByRole('button', { name: 'Retry locations' }));
+    fireEvent.click(form.getByRole('button', { name: 'Retry search' }));
     await waitFor(() =>
-      expect(form.getByText('No selectable locations are available.')).toBeDefined(),
+      expect(form.getByText('No locations matched. Try another name or language.')).toBeDefined(),
     );
     expect((form.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
       'Keep these notes',
@@ -266,7 +446,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
         content: {
           claimedHotelName: 'Corrected',
           applicantNotes: 'Keep correction',
-          administrativeUnitId: locations[1].id,
+          locationSelection: locationSelections[1],
         },
         version: 5,
       });
@@ -281,7 +461,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
     }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     await waitFor(() =>
-      expect(article.getByLabelText('Hotel location').querySelectorAll('option')).toHaveLength(3),
+      expect(article.getByLabelText('Choose a location').querySelectorAll('option')).toHaveLength(
+        3,
+      ),
     );
     fireEvent.change(article.getByLabelText('Hotel name stated in this application'), {
       target: { value: 'Corrected' },
@@ -289,7 +471,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
     fireEvent.change(article.getByLabelText('Application notes'), {
       target: { value: 'Keep correction' },
     });
-    fireEvent.change(article.getByLabelText('Hotel location'), {
+    fireEvent.change(article.getByLabelText('Choose a location'), {
       target: { value: locations[1].id },
     });
     fireEvent.click(article.getByRole('button', { name: 'Save private draft' }));
@@ -297,7 +479,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
     expect(
       (article.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
     ).toBe('Corrected');
-    expect((article.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(
+    expect((article.getByLabelText('Choose a location') as HTMLSelectElement).value).toBe(
       locations[1].id,
     );
     expect(submit.disabled).toBe(true);
@@ -310,7 +492,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
     expect((article.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
       'Keep correction',
     );
-    expect((article.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(
+    expect((article.getByLabelText('Choose a location') as HTMLSelectElement).value).toBe(
       locations[1].id,
     );
   });
@@ -322,9 +504,10 @@ describe('hotel location selection, snapshots, and error retention', () => {
       content: {
         claimedHotelName: 'Saved draft',
         applicantNotes: 'Saved notes',
-        administrativeUnitId: locations[0].id,
+        locationSelection: locationSelections[0],
       },
       location: locations[0],
+      locationState: 'current',
     });
     mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
     mockApiClient.submitHotelApplication
@@ -332,6 +515,12 @@ describe('hotel location selection, snapshots, and error retention', () => {
       .mockRejectedValueOnce(new ApiClientError('unavailable', 503));
     render(session(<HotelApplicantScreen />));
     const card = within(await screen.findByRole('article'));
+    await waitFor(() =>
+      expect(
+        (card.getByRole('button', { name: 'Submit this version for review' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
     fireEvent.change(card.getByLabelText('Application notes'), {
       target: { value: 'Unsaved correction' },
     });
@@ -357,8 +546,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
       content: {
         claimedHotelName: 'Changed-location draft',
         applicantNotes: 'New draft after approval',
-        administrativeUnitId: locations[1].id,
+        locationSelection: locationSelections[1],
       },
+      locationState: 'current',
     });
     mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
     render(session(<HotelApplicantScreen />));
@@ -369,17 +559,21 @@ describe('hotel location selection, snapshots, and error retention', () => {
       'Synthetic region / Synthetic lalibela',
     );
     expect(card.getAllByLabelText('Location preview')[0]?.textContent).toContain(
-      'Applicant-provided',
+      'Applicant-declared location — unverified.',
     );
     expect(card.getByText(/previous submitted version 3/)).toBeDefined();
   });
 
   it('shows the DTO snapshot in every private view independently of directory labels or a correction selection', async () => {
-    const snapshot: HotelLocation = {
-      ...locations[0],
+    const snapshot = {
+      geographyReleaseId: directoryRelease.id,
+      unitId: searchResults[0]!.unitId,
+      unitRevisionId: searchResults[0]!.unitRevisionId,
+      unitType: searchResults[0]!.unitType,
+      displayName: searchResults[0]!.displayName,
       hierarchy: [
-        { ...locations[0].hierarchy[0]!, label: 'Submitted region' },
-        { ...locations[0].hierarchy[1]!, label: 'Submitted town' },
+        { ...searchResults[0]!.hierarchy[0]!, displayName: 'Submitted region' },
+        { ...searchResults[0]!.hierarchy[1]!, displayName: 'Submitted town' },
       ],
     };
     const application = mockAdmittedApplication({
@@ -387,8 +581,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
       content: {
         claimedHotelName: 'Snapshot hotel',
         applicantNotes: '',
-        administrativeUnitId: locations[0].id,
+        locationSelection: locationSelections[0],
       },
+      locationState: 'submitted_snapshot',
     });
     mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [application] });
     mockApiClient.getAdmittedHotelWorkspace.mockResolvedValue(application);
@@ -398,7 +593,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
       'Submitted region / Submitted town',
     );
     fireEvent.change(
-      screen.getByLabelText('Hotel location', { selector: `#hotel-location-${application.id}` }),
+      screen.getByLabelText('Choose a location', {
+        selector: `#hotel-location-${application.id}-selection`,
+      }),
       { target: { value: locations[1].id } },
     );
     expect(screen.getByLabelText('Submitted location').textContent).toContain('Submitted town');
@@ -408,7 +605,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
       expect(element.textContent).toContain('Submitted town');
     applicant.unmount();
     mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
-      items: [mockBureauCase({ ...application })],
+      items: [mockBureauCase({ ...application, submittedLocation: snapshot })],
     });
     mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({ items: [application] });
     for (const element of [
@@ -481,7 +678,7 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
       content: {
         claimedHotelName: 'Grand Lalibela Hotel',
         applicantNotes: 'Draft application',
-        administrativeUnitId: 'demo-unit-woreda-lalibela',
+        locationSelection: locationSelections[1],
       },
     });
 
@@ -505,6 +702,7 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
     });
 
     const submitButton = screen.getByRole('button', { name: 'Submit this version for review' });
+    await waitFor(() => expect((submitButton as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(submitButton);
 
     await waitFor(() => {
@@ -563,7 +761,7 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
       content: {
         claimedHotelName: 'Synthetic changed-location hotel',
         applicantNotes: 'New submitted location',
-        administrativeUnitId: locations[1].id,
+        locationSelection: locationSelections[1],
       },
       location: locations[1],
       bureauDecision: null,

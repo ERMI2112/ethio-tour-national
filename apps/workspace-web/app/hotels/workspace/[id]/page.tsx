@@ -93,7 +93,14 @@ export default function AdmittedHotelWorkspacePage({
               {workspace.content.applicantNotes && <p>{workspace.content.applicantNotes}</p>}
               <HotelLocationDetails
                 location={workspace.location}
+                selection={workspace.content.locationSelection}
+                locationState={workspace.locationState}
                 submitted={workspace.status !== 'draft' && workspace.currentVersionId != null}
+                applicationVersion={
+                  workspace.status !== 'draft' && workspace.currentVersionId !== null
+                    ? workspace.currentVersion
+                    : undefined
+                }
               />
               <div className="decision-details">
                 <p>

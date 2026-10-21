@@ -140,8 +140,11 @@ function BureauCaseCard({
         </div>
       )}
       <HotelLocationDetails
-        location={caseItem.location}
-        submitted={caseItem.status !== 'draft' && caseItem.currentVersionId != null}
+        location={caseItem.submittedLocation}
+        selection={caseItem.content.locationSelection}
+        locationState={caseItem.locationState}
+        submitted
+        applicationVersion={caseItem.currentVersion}
       />
       <p className="muted">{caseItem.notice}</p>
       {caseItem.bureauDecision && (

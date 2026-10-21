@@ -180,6 +180,21 @@ main {
   font-weight: 700;
 }
 
+.hotel-location-label {
+  margin: 0;
+  font-weight: 700;
+}
+
+.location-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.location-search-row button {
+  white-space: nowrap;
+}
+
 .form-field input,
 .form-field textarea,
 .form-field select {
@@ -290,5 +305,9 @@ main {
   .workflow-links {
     display: grid;
     gap: 0.7rem;
+  }
+
+  .location-search-row {
+    grid-template-columns: 1fr;
   }
 }

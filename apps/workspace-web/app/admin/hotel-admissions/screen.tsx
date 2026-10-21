@@ -149,7 +149,14 @@ function AdmissionApplicationCard({
       {application.content.applicantNotes && <p>{application.content.applicantNotes}</p>}
       <HotelLocationDetails
         location={application.location}
+        selection={application.content.locationSelection}
+        locationState={application.locationState}
         submitted={application.status !== 'draft' && application.currentVersionId != null}
+        applicationVersion={
+          application.status !== 'draft' && application.currentVersionId !== null
+            ? application.currentVersion
+            : undefined
+        }
       />
       {application.bureauDecision && (
         <div className="decision-details">

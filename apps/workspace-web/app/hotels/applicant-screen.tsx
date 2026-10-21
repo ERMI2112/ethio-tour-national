@@ -6,12 +6,11 @@ import {
   createHotelApplicationRevision,
   getAdmittedHotelWorkspace,
   getMyHotelApplications,
-  getHotelLocations,
   submitHotelApplication,
 } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import type { HotelLocation } from '@ethio-tour/contracts';
+import type { HotelLocationSelection } from '@ethio-tour/contracts';
 import { HotelLocationDetails, HotelLocationSelector } from '../components/hotel-location';
 import { HotelDecisionHistory } from '../components/hotel-decision-history';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../components/hotel-pilot-ui';
@@ -32,26 +31,10 @@ export function HotelApplicantScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [locations, setLocations] = useState<HotelLocation[]>([]);
-  const [locationLoading, setLocationLoading] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
-  const [newLocationId, setNewLocationId] = useState('');
-  const loadLocations = useCallback(async () => {
-    if (!accessToken) return;
-    setLocationLoading(true);
-    setLocationError(null);
-    try {
-      setLocations((await getHotelLocations({ accessToken })).items);
-    } catch (requestError) {
-      setLocationError(describeApiFailure(requestError, 'loading locations'));
-    } finally {
-      setLocationLoading(false);
-    }
-  }, [accessToken]);
-
-  useEffect(() => {
-    void loadLocations();
-  }, [loadLocations]);
+  const [newLocationSelection, setNewLocationSelection] = useState<HotelLocationSelection | null>(
+    null,
+  );
+  const [newLocationSelectionValid, setNewLocationSelectionValid] = useState(false);
 
   const reload = useCallback(async () => {
     if (!accessToken) return;
@@ -79,10 +62,14 @@ export function HotelApplicantScreen() {
     const content = {
       claimedHotelName: String(form.get('claimedHotelName') ?? '').trim(),
       applicantNotes: String(form.get('applicantNotes') ?? '').trim(),
-      ...(newLocationId ? { administrativeUnitId: newLocationId } : {}),
+      ...(newLocationSelection ? { locationSelection: newLocationSelection } : {}),
     };
     if (!content.claimedHotelName) {
       setError('Enter the hotel name you are applying about.');
+      return;
+    }
+    if (!newLocationSelection || !newLocationSelectionValid) {
+      setError('Search and choose a location in the active directory before creating the draft.');
       return;
     }
 
@@ -94,7 +81,8 @@ export function HotelApplicantScreen() {
       setApplications((current) => [created, ...current]);
       setNotice('The private draft was returned by the API. Review it below before submitting.');
       formElement.reset();
-      setNewLocationId('');
+      setNewLocationSelection(null);
+      setNewLocationSelectionValid(false);
     } catch (requestError) {
       setError(describeApiFailure(requestError, 'creating the private application'));
     } finally {
@@ -170,14 +158,13 @@ export function HotelApplicantScreen() {
               </div>
               <HotelLocationSelector
                 id="new-hotel-location"
-                locations={locations}
-                value={newLocationId}
-                onChange={setNewLocationId}
-                loading={locationLoading}
-                error={locationError}
-                onRetry={() => void loadLocations()}
+                accessToken={accessToken}
+                value={newLocationSelection}
+                locationSnapshot={null}
+                onChange={setNewLocationSelection}
+                onSelectionValidityChange={setNewLocationSelectionValid}
               />
-              <button type="submit" disabled={creating}>
+              <button type="submit" disabled={creating || !newLocationSelectionValid}>
                 {creating ? 'Creating draft…' : 'Create private draft'}
               </button>
             </form>
@@ -218,10 +205,6 @@ export function HotelApplicantScreen() {
                   key={`${application.id}-${application.currentVersionId}`}
                   application={application}
                   accessToken={accessToken}
-                  locations={locations}
-                  locationLoading={locationLoading}
-                  locationError={locationError}
-                  onRetryLocations={() => void loadLocations()}
                   onSubmit={() => submitDraft(application)}
                   onCreateCorrection={(content) => createCorrection(application, content)}
                 />
@@ -239,21 +222,16 @@ function ApplicantApplicationCard({
   accessToken,
   onSubmit,
   onCreateCorrection,
-  locations,
-  locationLoading,
-  locationError,
-  onRetryLocations,
 }: Readonly<{
   application: HotelApplicationResponse;
   accessToken: string;
   onSubmit: () => Promise<void>;
   onCreateCorrection: (content: HotelApplicationContent) => Promise<void>;
-  locations: HotelLocation[];
-  locationLoading: boolean;
-  locationError: string | null;
-  onRetryLocations: () => void;
 }>) {
-  const [locationId, setLocationId] = useState(application.content.administrativeUnitId ?? '');
+  const [locationSelection, setLocationSelection] = useState<HotelLocationSelection | null>(
+    application.content.locationSelection ?? null,
+  );
+  const [locationSelectionValid, setLocationSelectionValid] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
@@ -267,10 +245,11 @@ function ApplicantApplicationCard({
       const form = new FormData(event.currentTarget);
       const claimedHotelName = String(form.get('claimedHotelName') ?? '').trim();
       if (!claimedHotelName) return;
+      if (!locationSelection || !locationSelectionValid) return;
       await onCreateCorrection({
         claimedHotelName,
         applicantNotes: String(form.get('applicantNotes') ?? '').trim(),
-        ...(locationId ? { administrativeUnitId: locationId } : {}),
+        locationSelection,
       });
     } finally {
       setBusy(false);
@@ -310,7 +289,14 @@ function ApplicantApplicationCard({
       {application.content.applicantNotes && <p>{application.content.applicantNotes}</p>}
       <HotelLocationDetails
         location={application.location}
+        selection={application.content.locationSelection}
+        locationState={application.locationState}
         submitted={application.status !== 'draft' && application.currentVersionId != null}
+        applicationVersion={
+          application.status !== 'draft' && application.currentVersionId !== null
+            ? application.currentVersion
+            : undefined
+        }
       />
       <p className="muted">
         Administrator admission: {application.admissionStatus.replaceAll('_', ' ')}
@@ -358,12 +344,23 @@ function ApplicantApplicationCard({
               aria-label="Admitted hotel workspace details"
             >
               <h4>Confirmed Admitted Workspace</h4>
-              <HotelLocationDetails
-                location={admittedWorkspace.location}
-                submitted={
-                  admittedWorkspace.status !== 'draft' && admittedWorkspace.currentVersionId != null
-                }
-              />
+              {admittedWorkspace.admittedVersion !== null &&
+              admittedWorkspace.admittedVersion === admittedWorkspace.currentVersion &&
+              admittedWorkspace.status !== 'draft' &&
+              admittedWorkspace.currentVersionId !== null ? (
+                <HotelLocationDetails
+                  location={admittedWorkspace.location}
+                  selection={admittedWorkspace.content.locationSelection}
+                  locationState={admittedWorkspace.locationState}
+                  submitted
+                  applicationVersion={admittedWorkspace.admittedVersion}
+                />
+              ) : (
+                <p className="notice" role="note">
+                  The location snapshot for the admitted version is not included in this response.
+                  The current application location is shown separately on its application card.
+                </p>
+              )}
               <p>
                 <strong>Claimed hotel:</strong> {admittedWorkspace.content.claimedHotelName}
               </p>
@@ -457,14 +454,14 @@ function ApplicantApplicationCard({
           </div>
           <HotelLocationSelector
             id={`hotel-location-${application.id}`}
-            locations={locations}
-            value={locationId}
-            onChange={setLocationId}
-            loading={locationLoading}
-            error={locationError}
-            onRetry={onRetryLocations}
+            accessToken={accessToken}
+            value={locationSelection}
+            locationSnapshot={application.location}
+            locationState={application.locationState}
+            onChange={setLocationSelection}
+            onSelectionValidityChange={setLocationSelectionValid}
           />
-          <button type="submit" disabled={busy}>
+          <button type="submit" disabled={busy || !locationSelectionValid}>
             {busy ? 'Saving draft…' : 'Save private draft'}
           </button>
         </form>
@@ -475,8 +472,9 @@ function ApplicantApplicationCard({
             type="button"
             disabled={
               busy ||
-              !application.content.administrativeUnitId ||
-              locationId !== application.content.administrativeUnitId
+              !application.content.locationSelection ||
+              !locationSelectionValid ||
+              !sameLocationSelection(locationSelection, application.content.locationSelection)
             }
             onClick={async () => {
               setBusy(true);
@@ -500,4 +498,17 @@ function replaceApplication(
   updated: HotelApplicationResponse,
 ) {
   return applications.map((application) => (application.id === updated.id ? updated : application));
+}
+
+function sameLocationSelection(
+  first: HotelLocationSelection | null,
+  second: HotelLocationSelection | undefined,
+) {
+  return Boolean(
+    first &&
+      second &&
+      first.geographyReleaseId === second.geographyReleaseId &&
+      first.unitId === second.unitId &&
+      first.unitRevisionId === second.unitRevisionId,
+  );
 }
