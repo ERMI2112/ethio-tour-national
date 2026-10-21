@@ -437,16 +437,38 @@ describe('hotel location selection, snapshots, and error retention', () => {
   });
 
   it('uses the structured stale-release code without displaying server error details', async () => {
-    mockApiClient.searchHotelLocations.mockRejectedValueOnce(
-      new ApiClientError('The API request failed', 409, 'LOCATION_RELEASE_STALE'),
-    );
+    mockApiClient.searchHotelLocations
+      .mockResolvedValueOnce(mockSearchResponse())
+      .mockRejectedValueOnce(
+        new ApiClientError('The API request failed', 409, 'LOCATION_RELEASE_STALE'),
+      );
     render(session(<HotelApplicantScreen />));
     const form = within(screen.getByRole('region', { name: 'Start an application' }));
+    await form.findByText('2 locations shown.');
+    fireEvent.change(form.getByLabelText('Hotel name stated in this application'), {
+      target: { value: 'Unsaved hotel name' },
+    });
+    fireEvent.change(form.getByLabelText('Application notes'), {
+      target: { value: 'Unsaved application notes' },
+    });
+    const location = form.getByLabelText('Choose a location') as HTMLSelectElement;
+    fireEvent.change(location, { target: { value: locations[0]!.id } });
+    const search = form.getByLabelText('Search locations');
+    fireEvent.change(search, { target: { value: 'updated query' } });
+    fireEvent.click(form.getByRole('button', { name: 'Search' }));
     const alert = await form.findByRole('alert');
+    await waitFor(() => expect(mockApiClient.searchHotelLocations).toHaveBeenCalledTimes(2));
     expect(alert.textContent).toContain(
       'The location directory changed. Search again and select a current location.',
     );
     expect(form.queryByText('The API request failed')).toBeNull();
+    expect(
+      (form.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
+    ).toBe('Unsaved hotel name');
+    expect((form.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
+      'Unsaved application notes',
+    );
+    expect(location.value).toBe(locations[0]!.id);
   });
 
   it('requires a saved selection before submitting a legacy draft and retains correction inputs on save and submit errors', async () => {
@@ -542,11 +564,10 @@ describe('hotel location selection, snapshots, and error retention', () => {
     });
     fireEvent.click(card.getByRole('button', { name: 'Submit this version for review' }));
     await waitFor(() =>
-      expect(screen.getByRole('alert').textContent).toContain(
-        'Review routing is currently unavailable',
+      expect(screen.getByRole('alert').textContent).toBe(
+        'Review routing is unavailable for this location. Your draft is saved; submission has not occurred.',
       ),
     );
-    expect(screen.getByRole('alert').textContent).toContain('Your private draft was not submitted');
     expect((card.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
       'Unsaved correction',
     );

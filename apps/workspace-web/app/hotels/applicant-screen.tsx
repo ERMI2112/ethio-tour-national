@@ -107,7 +107,7 @@ export function HotelApplicantScreen() {
         requestError instanceof ApiClientError &&
           (requestError.code === 'HOTEL_ROUTING_UNAVAILABLE' ||
             (requestError.status === 503 && requestError.code === undefined))
-          ? 'Review routing is currently unavailable. Your private draft was not submitted. Retry later or save a different location.'
+          ? 'Review routing is unavailable for this location. Your draft is saved; submission has not occurred.'
           : describeApiFailure(requestError, 'submitting this version'),
       );
     }
