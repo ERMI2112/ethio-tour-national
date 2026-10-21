@@ -498,7 +498,11 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
           },
         },
       );
-      expect([403, 404], 'Wrong office decision must be denied').toContain(deniedDecision.status());
+      await expectStatus(
+        deniedDecision,
+        404,
+        'Wrong office decision is non-enumerating like an inaccessible case read',
+      );
       await expectPrivateBodyDoesNotContain(
         deniedDecision,
         marker,

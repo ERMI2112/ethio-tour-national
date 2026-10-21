@@ -137,10 +137,21 @@ export function HotelLocationSelector({
       } catch (requestError) {
         if (requestId !== requestSequence.current) return;
         setNextCursor(null);
-        if (
+        const errorCode =
+          requestError instanceof Error &&
+          'code' in requestError &&
+          typeof requestError.code === 'string'
+            ? requestError.code
+            : undefined;
+        const errorStatus =
           requestError instanceof Error &&
           'status' in requestError &&
-          requestError.status === 409
+          typeof requestError.status === 'number'
+            ? requestError.status
+            : undefined;
+        if (
+          errorCode === 'LOCATION_RELEASE_STALE' ||
+          (errorStatus === 409 && errorCode === undefined)
         ) {
           setError('The location directory changed. Search again and select a current location.');
         } else {

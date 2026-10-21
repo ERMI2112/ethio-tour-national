@@ -104,7 +104,9 @@ export function HotelApplicantScreen() {
       setNotice('The API accepted the submission. Its status below reflects the API response.');
     } catch (requestError) {
       setError(
-        requestError instanceof ApiClientError && requestError.status === 503
+        requestError instanceof ApiClientError &&
+          (requestError.code === 'HOTEL_ROUTING_UNAVAILABLE' ||
+            (requestError.status === 503 && requestError.code === undefined))
           ? 'Review routing is currently unavailable. Your private draft was not submitted. Retry later or save a different location.'
           : describeApiFailure(requestError, 'submitting this version'),
       );

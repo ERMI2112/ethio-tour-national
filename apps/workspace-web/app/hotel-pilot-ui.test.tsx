@@ -50,6 +50,7 @@ vi.mock('@ethio-tour/api-client', () => ({
     public constructor(
       message: string,
       public readonly status: number,
+      public readonly code?: string,
     ) {
       super(message);
     }
@@ -435,6 +436,19 @@ describe('hotel location selection, snapshots, and error retention', () => {
     );
   });
 
+  it('uses the structured stale-release code without displaying server error details', async () => {
+    mockApiClient.searchHotelLocations.mockRejectedValueOnce(
+      new ApiClientError('The API request failed', 409, 'LOCATION_RELEASE_STALE'),
+    );
+    render(session(<HotelApplicantScreen />));
+    const form = within(screen.getByRole('region', { name: 'Start an application' }));
+    const alert = await form.findByRole('alert');
+    expect(alert.textContent).toContain(
+      'The location directory changed. Search again and select a current location.',
+    );
+    expect(form.queryByText('The API request failed')).toBeNull();
+  });
+
   it('requires a saved selection before submitting a legacy draft and retains correction inputs on save and submit errors', async () => {
     const legacy = mockApplication({ status: 'draft', currentVersionId: null });
     mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [legacy] });
@@ -512,7 +526,9 @@ describe('hotel location selection, snapshots, and error retention', () => {
     mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
     mockApiClient.submitHotelApplication
       .mockReset()
-      .mockRejectedValueOnce(new ApiClientError('unavailable', 503));
+      .mockRejectedValueOnce(
+        new ApiClientError('The API request failed', 503, 'HOTEL_ROUTING_UNAVAILABLE'),
+      );
     render(session(<HotelApplicantScreen />));
     const card = within(await screen.findByRole('article'));
     await waitFor(() =>
