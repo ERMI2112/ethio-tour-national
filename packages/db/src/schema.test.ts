@@ -10,6 +10,8 @@ describe('platform and synthetic hotel pilot database schema', () => {
         'administrativeUnits',
         'administrativeUnitPaths',
         'organizations',
+        'hotelLocations',
+        'hotelLocationRoutes',
         'hotelApplications',
         'hotelApplicationVersions',
         'hotelBureauCases',
@@ -30,6 +32,6 @@ describe('platform and synthetic hotel pilot database schema', () => {
         'notifications',
       ]),
     );
-    expect(Object.keys(schema)).toHaveLength(22);
+    expect(Object.keys(schema)).toHaveLength(24);
   });
 });

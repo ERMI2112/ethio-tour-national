@@ -2,8 +2,8 @@
 
 This is the single test-only runbook for the synthetic hotel pilot. It does not start services,
 provision identities, read `.env`, or modify production configuration. The commands below were
-prepared from source and were not executed against PostgreSQL, Keycloak, Docker, or a browser in
-this task.
+prepared initially without services. This runbook is not evidence of execution;
+actual source-specific results and cleanup are recorded separately in the acceptance handoffs.
 
 ## PostgreSQL Migration And Integration Suite
 
@@ -37,7 +37,7 @@ pnpm test:hotel:integration
 
 `pnpm db:migrate:hotel-test` applies the repository's pending Drizzle migration chain to the
 validated test-only target. For a fresh database this includes the existing registry baseline
-and additive hotel migration `0002_normal_ronan.sql`. It writes no seed data.
+and additive hotel migrations `0002_normal_ronan.sql` and `0003_hotel_multi_office.sql`. It writes no seed data.
 `pnpm test:hotel:migration` runs SQL-shape and URL-guard unit tests without connecting to a
 database. `pnpm test:hotel:integration` uses a dedicated Vitest config that sets
 `HOTEL_PILOT_TEST_REQUIRED=true`; an absent or invalid target fails during test loading instead
@@ -51,7 +51,7 @@ path against an existing EthioTour database, any existing Compose project, or an
 
 The browser journey is `tests/e2e/hotel-onboarding-live.spec.ts`, configured by
 `playwright.hotel.config.ts`. It uses the real Keycloak authorization-code + PKCE S256 flow and
-three distinct synthetic identities loaded from an external identity file. It creates a private
+four distinct synthetic identities loaded from an external identity file. It creates private
 application and decision history and does not clean those rows up. Use a fresh disposable API,
 database, Keycloak realm/storage, and workspace-web instance. The harness accepts loopback URLs
 only, rejects port `56320`, requires `HOTEL_E2E_DISPOSABLE=true`, and does not prove service or
@@ -65,12 +65,12 @@ Set these process variables in a dedicated test shell:
 - `HOTEL_E2E_API_URL`: local API base URL with the `/api` path.
 - `HOTEL_E2E_KEYCLOAK_ISSUER_URL`: browser-reachable synthetic realm issuer.
 - `HOTEL_E2E_IDENTITIES_FILE`: absolute path to the external identity JSON with distinct
-  `applicant`, `bureauReviewer`, and `administrator` accounts.
+  `applicant`, `bureauReviewer`, `bureauReviewerB`, and `administrator` accounts.
 
 The Keycloak client must be `workspace-web`, allow the exact callback
 `<workspace-origin>/auth/callback`, and issue PKCE S256 authorization requests. Its access token
 must satisfy the API's configured audience validation. Provision the applicant, synthetic
-Bureau-reviewer, and platform-Administrator identities with the permissions required by the
+Bureau-reviewer A, Bureau-reviewer B, and platform-Administrator identities with the permissions required by the
 pilot; never use real accounts. The pilot Bureau route and outcomes are synthetic and do not
 establish nationwide coverage or government authority.
 
@@ -82,6 +82,15 @@ URI is exactly `<HOTEL_E2E_WORKSPACE_URL>/auth/callback` and whose web origin ma
 reuse an existing realm to fit the test. The live spec does not provision users or database
 grants, and this runbook contains no user credentials or realm secrets; provisioning and
 identity-to-grant binding remain an operator prerequisite.
+
+For this first multi-office slice the supported demo seed binds the reviewer subjects
+to `hotel-bureau.reviewer` (office A) and `hotel-bureau-b.reviewer` (office B),
+and the Administrator to `platform.hotel-admin`. The applicant gets no reviewer
+or provider grant during setup. Use two applications selecting the directory IDs
+`demo-unit-woreda-gondar` and `demo-unit-woreda-lalibela`. Never send an office or
+grant from the browser as routing authority. Require both wrong-office queue
+exclusion and direct detail/decision denial in the real-auth report. No account
+or route is created in any existing environment by this runbook.
 
 This journey does not test restrictive CORS policy. At this candidate the API enables CORS with
 request-origin reflection (`origin: true` in `apps/backend/api/src/main.ts`), so a passing

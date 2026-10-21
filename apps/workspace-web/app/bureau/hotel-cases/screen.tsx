@@ -2,6 +2,7 @@
 
 import { decideHotelApplication, getBureauHotelCases } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
+import { HotelLocationDetails } from '../../components/hotel-location';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../../lib/hotel-pilot-session';
 import {
@@ -138,6 +139,10 @@ function BureauCaseCard({
           <p>{caseItem.content.applicantNotes}</p>
         </div>
       )}
+      <HotelLocationDetails
+        location={caseItem.location}
+        submitted={caseItem.status !== 'draft' && caseItem.currentVersionId != null}
+      />
       <p className="muted">{caseItem.notice}</p>
       {caseItem.bureauDecision && (
         <p className="muted">

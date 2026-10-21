@@ -12,7 +12,10 @@ export interface HotelE2eIdentity {
 
 export interface HotelE2eIdentities {
   applicant: HotelE2eIdentity;
+  /** Owner-provisioned reviewer for demo-org-hotel-bureau. */
   bureauReviewer: HotelE2eIdentity;
+  /** Owner-provisioned reviewer for demo-org-hotel-bureau-b. */
+  bureauReviewerB: HotelE2eIdentity;
   administrator: HotelE2eIdentity;
 }
 
@@ -90,40 +93,46 @@ function loadIdentities(): HotelE2eIdentities {
     parsed = JSON.parse(identityFile);
   } catch {
     throw new Error(
-      'The hotel identity file must contain valid JSON with three synthetic identities.',
+      'The hotel identity file must contain valid JSON with four synthetic identities.',
     );
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(
-      'The hotel identity file must contain applicant, bureauReviewer, and administrator entries.',
+      'The hotel identity file must contain applicant, bureauReviewer, bureauReviewerB, and administrator entries.',
     );
   }
   const input = parsed as Record<string, unknown>;
   if (
     Object.keys(input).some(
-      (key) => !['applicant', 'bureauReviewer', 'administrator'].includes(key),
+      (key) => !['applicant', 'bureauReviewer', 'bureauReviewerB', 'administrator'].includes(key),
     )
   ) {
     throw new Error(
-      'The hotel identity file may contain only the three required synthetic account entries.',
+      'The hotel identity file may contain only the four required synthetic account entries.',
     );
   }
   const applicant = identityFrom(input.applicant);
   const bureauReviewer = identityFrom(input.bureauReviewer);
+  const bureauReviewerB = identityFrom(input.bureauReviewerB);
   const administrator = identityFrom(input.administrator);
-  if (!applicant || !bureauReviewer || !administrator) {
+  if (!applicant || !bureauReviewer || !bureauReviewerB || !administrator) {
     throw new Error('Each synthetic identity must contain a non-empty username and password.');
   }
 
-  const usernames = [applicant.username, bureauReviewer.username, administrator.username];
-  if (new Set(usernames.map((username) => username.toLocaleLowerCase('en-US'))).size !== 3) {
+  const usernames = [
+    applicant.username,
+    bureauReviewer.username,
+    bureauReviewerB.username,
+    administrator.username,
+  ];
+  if (new Set(usernames.map((username) => username.toLocaleLowerCase('en-US'))).size !== 4) {
     throw new Error(
-      'Applicant, Bureau reviewer, and Administrator must be three distinct Keycloak accounts.',
+      'Applicant, both Bureau reviewers, and Administrator must be four distinct Keycloak accounts.',
     );
   }
 
-  return { applicant, bureauReviewer, administrator };
+  return { applicant, bureauReviewer, bureauReviewerB, administrator };
 }
 
 assertDisposableOptIn(process.env.HOTEL_E2E_DISPOSABLE);

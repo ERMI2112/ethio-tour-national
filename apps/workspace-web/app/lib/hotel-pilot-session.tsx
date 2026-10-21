@@ -29,9 +29,7 @@ export function HotelPilotSessionProvider({
   };
 
   return (
-    <HotelPilotSessionContext.Provider value={value}>
-      {children}
-    </HotelPilotSessionContext.Provider>
+    <HotelPilotSessionContext.Provider value={value}>{children}</HotelPilotSessionContext.Provider>
   );
 }
 

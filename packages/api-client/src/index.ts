@@ -10,6 +10,8 @@ import type {
   HotelApplicationListResponse,
   HotelApplicationResponse,
   HotelBureauCaseListResponse,
+  HotelBureauCaseResponse,
+  HotelLocationDirectoryResponse,
   PrivateRegistryResourceResponse,
   PublicAttraction,
   PublicDestination,
@@ -160,6 +162,19 @@ export function createHotelApplication(
   options: AuthenticatedApiRequestOptions,
 ): Promise<HotelApplicationResponse> {
   return apiRequest('hotels/applications', 'POST', options, request);
+}
+
+export function getHotelLocations(
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelLocationDirectoryResponse> {
+  return apiRequest('hotels/locations', 'GET', options);
+}
+
+export function getHotelBureauCase(
+  caseId: string,
+  options: AuthenticatedApiRequestOptions,
+): Promise<HotelBureauCaseResponse> {
+  return apiRequest(`bureau/hotel-cases/${encodeURIComponent(caseId)}`, 'GET', options);
 }
 
 export function getMyHotelApplications(

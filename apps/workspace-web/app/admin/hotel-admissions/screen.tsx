@@ -2,6 +2,7 @@
 
 import { decideHotelAdmission, getHotelAdmissionQueue } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
+import { HotelLocationDetails } from '../../components/hotel-location';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../../lib/hotel-pilot-session';
 import {
@@ -146,6 +147,10 @@ function AdmissionApplicationCard({
         </span>
       </div>
       {application.content.applicantNotes && <p>{application.content.applicantNotes}</p>}
+      <HotelLocationDetails
+        location={application.location}
+        submitted={application.status !== 'draft' && application.currentVersionId != null}
+      />
       {application.bureauDecision && (
         <div className="decision-details">
           <strong>

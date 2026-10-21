@@ -39,6 +39,6 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:hotel:migration": "vitest run src/hotel-migration.test.ts src/disposable-database-target.test.ts"
+    "test:hotel:migration": "vitest run src/hotel-migration.test.ts src/hotel-multi-office-migration.test.ts src/disposable-database-target.test.ts"
   }
 }

@@ -113,6 +113,23 @@ export type HotelAdmissionStatus = 'not_eligible' | 'pending' | 'admitted' | 'de
 export interface HotelApplicationContent {
   claimedHotelName: string;
   applicantNotes: string;
+  /** Optional on private legacy drafts; required by the server at submission. */
+  administrativeUnitId?: string;
+}
+
+export interface HotelLocationNode {
+  id: string;
+  label: string;
+  parentId: string | null;
+}
+
+export interface HotelLocation extends HotelLocationNode {
+  /** Root-to-selected-node labels, with no office or authorization metadata. */
+  hierarchy: HotelLocationNode[];
+}
+
+export interface HotelLocationDirectoryResponse {
+  items: HotelLocation[];
 }
 
 export interface CreateHotelApplicationRequest {
@@ -161,6 +178,7 @@ export interface HotelApplicationResponse {
   currentVersion: number;
   currentVersionId: string | null;
   content: HotelApplicationContent;
+  location: HotelLocation | null;
   bureauDecision: HotelBureauDecisionSummary | null;
   admissionDecision: HotelAdmissionDecisionSummary | null;
   workspaceAccess: 'not_admitted' | 'private_only';

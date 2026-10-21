@@ -15,6 +15,7 @@ import type {
   HotelApplicationResponse,
   HotelBureauDecisionSummary,
   HotelBureauCaseResponse,
+  HotelLocation,
 } from '@ethio-tour/contracts';
 import type { DatabaseClient } from '@ethio-tour/db';
 import type postgres from 'postgres';
@@ -38,7 +39,7 @@ const applicationSelect = `
   SELECT application.id, application.status, application.admission_status,
          application.current_version_number, application.current_submitted_version_id,
          application.draft_content, application.version, application.provider_organization_id,
-         application.is_synthetic,
+         application.is_synthetic, current_version.location_snapshot,
          CASE WHEN application.status = 'draft' THEN application.draft_content
               ELSE COALESCE(current_version.content, application.draft_content) END AS response_content,
          (SELECT jsonb_build_object(
@@ -87,8 +88,65 @@ export class PostgresHotelOnboardingStore implements HotelOnboardingStore {
 class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
   constructor(private readonly sql: SqlTransaction) {}
 
+  private async location(unitId: string): Promise<HotelLocation | null> {
+    const rows = await this.sql.unsafe<Row[]>(
+      `WITH RECURSIVE hierarchy AS (
+         SELECT id, display_name, parent_id, is_synthetic, ARRAY[id] AS path, false AS cycle
+         FROM administrative_units WHERE id = $1
+         UNION ALL
+         SELECT parent.id, parent.display_name, parent.parent_id, parent.is_synthetic,
+                child.path || parent.id, parent.id = ANY(child.path)
+         FROM administrative_units parent JOIN hierarchy child ON parent.id = child.parent_id
+         WHERE NOT child.cycle
+       ) SELECT * FROM hierarchy ORDER BY cardinality(path) DESC`,
+      [unitId],
+    );
+    if (
+      !rows.length ||
+      rows[0]!.parent_id !== null ||
+      rows.some((row) => row.cycle === true || row.is_synthetic !== true)
+    )
+      return null;
+    const hierarchy = rows.map((row) => ({
+      id: stringValue(row.id),
+      label: stringValue(row.display_name),
+      parentId: nullableString(row.parent_id),
+    }));
+    return { ...hierarchy[hierarchy.length - 1]!, hierarchy };
+  }
+
+  async getAdministrativeUnitAncestorIds(unitId: string): Promise<string[]> {
+    const location = await this.location(unitId);
+    return location ? location.hierarchy.slice(0, -1).map((node) => node.id) : [];
+  }
+
+  async listLocations(): Promise<HotelLocation[]> {
+    const rows = await this.sql.unsafe<Row[]>(
+      `SELECT administrative_unit_id FROM hotel_locations WHERE enabled = true ORDER BY administrative_unit_id`,
+    );
+    const locations = await Promise.all(
+      rows.map((row) => this.location(stringValue(row.administrative_unit_id))),
+    );
+    return locations.filter((item): item is HotelLocation => item !== null);
+  }
+
+  private async toResponse(row: Row): Promise<HotelApplicationResponse> {
+    const response = toApplicationResponse(row);
+    if (row.status === 'draft' && response.content.administrativeUnitId) {
+      const [enabled] = await this.sql.unsafe<Row[]>(
+        `SELECT administrative_unit_id FROM hotel_locations WHERE administrative_unit_id = $1 AND enabled = true`,
+        [response.content.administrativeUnitId],
+      );
+      response.location = enabled
+        ? await this.location(response.content.administrativeUnitId)
+        : null;
+    }
+    return response;
+  }
+
   async getAuthorizationContext(actor: RegistryActor): Promise<AuthorizationContext> {
     await this.assertNoIssuerCollision(actor);
+    await this.resolveProfile(actor, false);
     const rows = await this.sql.unsafe<Row[]>(
       `
         SELECT profile.active AS profile_active,
@@ -162,7 +220,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     const [created] = await this.sql.unsafe<Row[]>(
       `INSERT INTO hotel_applications (applicant_profile_id, draft_content)
        VALUES ($1, $2::jsonb) RETURNING id`,
-      [profileId, JSON.stringify(content)],
+      [profileId, this.sql.json(content as unknown as postgres.JSONValue)],
     );
     if (!created?.id) throw new Error('Created hotel application insert returned no row.');
     const [row] = await this.sql.unsafe<Row[]>(`${applicationSelect} WHERE application.id = $1`, [
@@ -178,7 +236,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       null,
       { status: 'draft' },
     );
-    return toApplicationResponse(row);
+    return this.toResponse(row);
   }
 
   async listOwnedApplications(actor: RegistryActor): Promise<HotelApplicationResponse[]> {
@@ -188,7 +246,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `${applicationSelect} WHERE application.applicant_profile_id = $1 ORDER BY application.updated_at DESC, application.id`,
       [profileId],
     );
-    return rows.map(toApplicationResponse);
+    return Promise.all(rows.map((row) => this.toResponse(row)));
   }
 
   async getOwnedApplication(
@@ -201,7 +259,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       `${applicationSelect} WHERE application.id = $1 AND application.applicant_profile_id = $2`,
       [applicationId, profileId],
     );
-    return row ? toApplicationResponse(row) : null;
+    return row ? this.toResponse(row) : null;
   }
 
   async updateDraft(
@@ -228,7 +286,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
            admission_status = CASE WHEN admission_status = 'admitted' THEN 'admitted' ELSE 'not_eligible' END,
            version = version + 1, updated_at = now()
        WHERE id = $1 AND applicant_profile_id = $2`,
-      [applicationId, profileId, JSON.stringify(content)],
+      [applicationId, profileId, this.sql.json(content as unknown as postgres.JSONValue)],
     );
     await this.appendAudit(
       actor,
@@ -248,7 +306,6 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     actor: RegistryActor,
     applicationId: string,
     expectedVersion: number,
-    route: HotelBureauRoute,
   ): Promise<HotelApplicationResponse | null> {
     const profileId = await this.resolveProfile(actor, false);
     if (!profileId) return null;
@@ -262,14 +319,50 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       throw conflict('This application is terminal and cannot be submitted.');
     }
     await this.requireAdmittedWorkspaceGrant(actor, row, 'hotel:workspace:edit');
-    await this.assertSyntheticRoute(route);
+    // SHARE blocks all route writes, including inserts that would create ambiguity.
+    await this.sql.unsafe(`LOCK TABLE hotel_location_routes IN SHARE MODE`);
+    await this.sql.unsafe(`LOCK TABLE administrative_units IN SHARE MODE`);
+    const content = jsonValue(row.draft_content) as HotelApplicationContent;
+    const unitId = content.administrativeUnitId;
+    if (!unitId) throw unavailableRoute();
+    const [selected] = await this.sql.unsafe<Row[]>(
+      `SELECT administrative_unit_id FROM hotel_locations
+       WHERE administrative_unit_id = $1 AND enabled = true FOR SHARE`,
+      [unitId],
+    );
+    const location = selected ? await this.location(unitId) : null;
+    if (!location) throw unavailableRoute();
+    const routes = await this.sql.unsafe<Row[]>(
+      `SELECT bureau_organization_id FROM hotel_location_routes WHERE location_unit_id = $1 AND enabled = true`,
+      [unitId],
+    );
+    if (routes.length !== 1) throw unavailableRoute();
+    const route = {
+      organizationId: stringValue(routes[0]!.bureau_organization_id),
+      administrativeUnitId: unitId,
+    };
+    const [office] = await this.sql.unsafe<Row[]>(
+      `SELECT id FROM organizations WHERE id = $1 AND is_synthetic = true
+       AND organization_type = 'administrative' FOR SHARE`,
+      [route.organizationId],
+    );
+    if (!office) throw unavailableRoute();
     const nextNumber = Number(row.current_version_number) + 1;
     const [version] = await this.sql.unsafe<Row[]>(
       `INSERT INTO hotel_application_versions
-         (application_id, version_number, content, submitted_by_profile_id)
-       VALUES ($1, $2, $3::jsonb, $4)
+         (application_id, version_number, content, submitted_by_profile_id,
+          location_unit_id, location_snapshot, bureau_organization_id, scope_unit_id)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6::jsonb, $7, $5)
        RETURNING id`,
-      [applicationId, nextNumber, JSON.stringify(jsonValue(row.draft_content)), profileId],
+      [
+        applicationId,
+        nextNumber,
+        this.sql.json(content as unknown as postgres.JSONValue),
+        profileId,
+        unitId,
+        this.sql.json(location as unknown as postgres.JSONValue),
+        route.organizationId,
+      ],
     );
     if (!version?.id) throw new Error('Submitted hotel version insert returned no row.');
     const versionId = stringValue(version.id);
@@ -329,31 +422,60 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       : null;
   }
 
-  async listBureauCases(route: HotelBureauRoute): Promise<HotelBureauCaseResponse[]> {
+  async listBureauCases(actor: RegistryActor): Promise<HotelBureauCaseResponse[]> {
     const rows = await this.sql.unsafe<Row[]>(
       `SELECT bureau_case.id AS case_id, bureau_case.status AS case_status, application.id AS application_id
        FROM hotel_bureau_cases bureau_case
        JOIN hotel_applications application ON application.id = bureau_case.application_id
-       WHERE bureau_case.bureau_organization_id = $1 AND bureau_case.scope_unit_id = $2
-         AND bureau_case.status IN ('submitted', 'in_review')
+       WHERE bureau_case.status IN ('submitted', 'in_review')
+         AND application.status = 'submitted'
          AND application.current_submitted_version_id = bureau_case.application_version_id
          AND application.is_synthetic = true
          AND EXISTS (SELECT 1 FROM organizations org WHERE org.id = bureau_case.bureau_organization_id AND org.is_synthetic = true AND org.organization_type = 'administrative')
          AND EXISTS (SELECT 1 FROM administrative_units unit WHERE unit.id = bureau_case.scope_unit_id AND unit.is_synthetic = true)
        ORDER BY bureau_case.created_at, bureau_case.id`,
-      [route.organizationId, route.administrativeUnitId],
     );
     const results: HotelBureauCaseResponse[] = [];
     for (const row of rows) {
-      const application = await this.loadApplication(stringValue(row.application_id));
-      if (application)
-        results.push({
-          ...application,
-          caseId: stringValue(row.case_id),
-          caseStatus: stringValue(row.case_status) as HotelBureauCaseResponse['caseStatus'],
-        });
+      const item = await this.getBureauCase(actor, stringValue(row.case_id));
+      if (item) results.push(item);
     }
     return results;
+  }
+
+  async getBureauCase(
+    actor: RegistryActor,
+    caseId: string,
+  ): Promise<HotelBureauCaseResponse | null> {
+    const target = await this.getBureauDecisionTarget(caseId);
+    if (!target?.organizationId || !target.administrativeUnitId) return null;
+    const decision = authorize(await this.getAuthorizationContext(actor), {
+      capability: 'hotel:application:bureau:read',
+      organizationId: target.organizationId,
+      administrativeUnitId: target.administrativeUnitId,
+      administrativeUnitAncestorIds: await this.getAdministrativeUnitAncestorIds(
+        target.administrativeUnitId,
+      ),
+      resourceIsSynthetic: target.resourceIsSynthetic,
+    });
+    if (!decision.allowed) return null;
+    const [row] = await this.sql.unsafe<Row[]>(
+      `${applicationSelect}
+       JOIN hotel_bureau_cases bureau_case ON bureau_case.application_id = application.id
+        AND bureau_case.application_version_id = application.current_submitted_version_id
+       WHERE bureau_case.id = $1 AND application.status <> 'draft'`,
+      [caseId],
+    );
+    if (!row) return null;
+    const [caseRow] = await this.sql.unsafe<Row[]>(
+      `SELECT status FROM hotel_bureau_cases WHERE id = $1`,
+      [caseId],
+    );
+    return {
+      ...(await this.toResponse(row)),
+      caseId,
+      caseStatus: stringValue(caseRow!.status) as HotelBureauCaseResponse['caseStatus'],
+    };
   }
 
   async decideBureauCase(
@@ -406,6 +528,9 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       capability: 'hotel:application:bureau:decide',
       organizationId: route.organizationId,
       administrativeUnitId: route.administrativeUnitId,
+      administrativeUnitAncestorIds: await this.getAdministrativeUnitAncestorIds(
+        route.administrativeUnitId,
+      ),
       resourceIsSynthetic: true,
     });
     if (!authorization.allowed) throw forbidden(authorization.reason);
@@ -514,7 +639,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
          AND application.is_synthetic = true
        ORDER BY application.updated_at, application.id`,
     );
-    return rows.map(toApplicationResponse);
+    return Promise.all(rows.map((row) => this.toResponse(row)));
   }
 
   async decideAdmission(
@@ -714,30 +839,6 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
       );
   }
 
-  private async assertSyntheticRoute(route: HotelBureauRoute): Promise<void> {
-    const [row] = await this.sql.unsafe<Row[]>(
-      `SELECT organization.organization_type, organization.is_synthetic AS organization_synthetic,
-              unit.is_synthetic AS unit_synthetic
-       FROM organizations organization
-       CROSS JOIN administrative_units unit
-       WHERE organization.id = $1 AND unit.id = $2
-         AND organization.administrative_unit_id = unit.id`,
-      [route.organizationId, route.administrativeUnitId],
-    );
-    if (!row || row.organization_synthetic !== true || row.unit_synthetic !== true) {
-      throw new HotelOnboardingError(
-        'unavailable',
-        'The configured synthetic Bureau route is missing or invalid.',
-      );
-    }
-    if (stringValue(row.organization_type) !== 'administrative') {
-      throw new HotelOnboardingError(
-        'unavailable',
-        'The configured synthetic Bureau organization type is invalid.',
-      );
-    }
-  }
-
   private async lockOwnedApplication(
     applicationId: string,
     profileId: string,
@@ -767,7 +868,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
     const [row] = await this.sql.unsafe<Row[]>(`${applicationSelect} WHERE application.id = $1`, [
       applicationId,
     ]);
-    return row ? toApplicationResponse(row) : null;
+    return row ? this.toResponse(row) : null;
   }
 
   private async getConfiguredAdmissionRoute(organizationId: string): Promise<boolean> {
@@ -819,7 +920,7 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
         revisionId,
         reasonCode,
         POLICY_VERSION,
-        JSON.stringify(details),
+        this.sql.json(details),
       ],
     );
   }
@@ -835,6 +936,10 @@ function toApplicationResponse(row: Row): HotelApplicationResponse {
     currentVersion: Number(row.current_version_number),
     currentVersionId: nullableString(row.response_version_id),
     content: jsonValue(row.response_content) as HotelApplicationContent,
+    location:
+      row.status === 'draft'
+        ? null
+        : ((jsonValue(row.location_snapshot) as HotelLocation | null) ?? null),
     bureauDecision: bureauDecision(row.bureau_decision),
     admissionDecision: admissionDecision(row.admission_decision),
     workspaceAccess: row.admission_status === 'admitted' ? 'private_only' : 'not_admitted',
@@ -895,4 +1000,11 @@ function conflict(reason: string): HotelOnboardingError {
 
 function forbidden(reason: string): HotelOnboardingError {
   return new HotelOnboardingError('forbidden', reason);
+}
+
+function unavailableRoute(): HotelOnboardingError {
+  return new HotelOnboardingError(
+    'unavailable',
+    'The selected synthetic location has no unique available Bureau route.',
+  );
 }

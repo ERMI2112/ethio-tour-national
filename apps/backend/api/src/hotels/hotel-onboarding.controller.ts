@@ -25,12 +25,18 @@ import {
   UpdateHotelApplicationDto,
 } from './hotel-onboarding.dto';
 import { HotelOnboardingExceptionFilter } from './hotel-onboarding-exception.filter';
+import { HotelRequestBodyGuard } from './hotel-request-body.guard';
 
 @Controller('hotels')
-@UseGuards(KeycloakAuthGuard)
+@UseGuards(KeycloakAuthGuard, HotelRequestBodyGuard)
 @UseFilters(HotelOnboardingExceptionFilter)
 export class HotelApplicationsController {
   constructor(@Inject(HotelOnboardingService) private readonly hotels: HotelOnboardingService) {}
+
+  @Get('locations')
+  locations(@CurrentActor() actor: RegistryActor) {
+    return this.hotels.listLocations(actor);
+  }
 
   @Get('applications')
   listMine(@CurrentActor() actor: RegistryActor) {
@@ -78,7 +84,7 @@ export class HotelApplicationsController {
 }
 
 @Controller('bureau/hotel-cases')
-@UseGuards(KeycloakAuthGuard)
+@UseGuards(KeycloakAuthGuard, HotelRequestBodyGuard)
 @UseFilters(HotelOnboardingExceptionFilter)
 export class BureauHotelCasesController {
   constructor(@Inject(HotelOnboardingService) private readonly hotels: HotelOnboardingService) {}
@@ -86,6 +92,11 @@ export class BureauHotelCasesController {
   @Get()
   list(@CurrentActor() actor: RegistryActor) {
     return this.hotels.listBureauCases(actor);
+  }
+
+  @Get(':caseId')
+  get(@CurrentActor() actor: RegistryActor, @Param('caseId', ParseUUIDPipe) caseId: string) {
+    return this.hotels.getBureauCase(actor, caseId);
   }
 
   @Post(':caseId/decision')
@@ -99,7 +110,7 @@ export class BureauHotelCasesController {
 }
 
 @Controller('admin/hotel-admissions')
-@UseGuards(KeycloakAuthGuard)
+@UseGuards(KeycloakAuthGuard, HotelRequestBodyGuard)
 @UseFilters(HotelOnboardingExceptionFilter)
 export class AdministratorHotelAdmissionsController {
   constructor(@Inject(HotelOnboardingService) private readonly hotels: HotelOnboardingService) {}

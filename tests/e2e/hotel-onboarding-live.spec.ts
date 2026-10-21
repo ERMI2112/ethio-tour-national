@@ -8,6 +8,7 @@ import {
 } from '@playwright/test';
 import type { HotelE2eIdentity } from './hotel-onboarding-support';
 import { hotelE2eConfig } from './hotel-onboarding-support';
+import type { HotelBureauCaseResponse, HotelLocation } from '../../packages/contracts/src/index';
 
 interface SignedInActor {
   page: Page;
@@ -223,14 +224,17 @@ async function expectPrivateBodyDoesNotContain(
   if (body.includes(privateMarker)) throw new Error(assertion);
 }
 
-test('applicant submission, scoped Bureau review, Administrator admission, and private workspace access', async ({
+test('two-office isolation, applicant submissions, authorized Bureau reviews, Administrator admission, and private workspace access', async ({
   browser,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
   const actors: Array<{ close: () => Promise<void> }> = [];
   const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const hotelName = `Synthetic E2E hotel ${uniqueSuffix}`;
   const applicantNotes = `Synthetic acceptance-only application ${uniqueSuffix}`;
+  const hotelNameB = `Synthetic E2E hotel B ${uniqueSuffix}`;
+  const locationAId = 'demo-unit-woreda-gondar';
+  const locationBId = 'demo-unit-woreda-lalibela';
 
   try {
     const applicant = await signInThroughKeycloak(
@@ -256,6 +260,12 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
     const newApplicationForm = applicant.page.getByRole('region', { name: 'Start an application' });
     await newApplicationForm.getByLabel('Hotel name stated in this application').fill(hotelName);
     await newApplicationForm.getByLabel('Application notes').fill(applicantNotes);
+    await expect(newApplicationForm.getByLabel('Hotel location')).toBeEnabled();
+    await newApplicationForm.getByLabel('Hotel location').selectOption(locationAId);
+    await expect(newApplicationForm.getByLabel('Location preview')).toContainText(
+      'Applicant-provided',
+    );
+    await expectUiApiResponse(applicant.apiResponses, 'GET', 'hotels/locations', 200);
     const createResponsePromise = applicant.page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
@@ -322,6 +332,48 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
       201,
     );
 
+    const submittedARead = await authenticatedGet(applicant, applicationRoute);
+    await expectStatus(submittedARead, 200, 'Applicant reads submitted A');
+    const submittedA = (await submittedARead.json()) as { location: HotelLocation };
+    expect(submittedA.location.id).toBe(locationAId);
+    const hierarchyA = submittedA.location.hierarchy.map((node) => node.label).join(' / ');
+    await expect(
+      applicant.page
+        .locator('article.application-card')
+        .filter({ has: applicant.page.getByRole('heading', { name: hotelName, exact: true }) })
+        .getByLabel('Submitted location'),
+    ).toContainText(hierarchyA);
+
+    await newApplicationForm.getByLabel('Hotel name stated in this application').fill(hotelNameB);
+    await newApplicationForm
+      .getByLabel('Application notes')
+      .fill(`Synthetic second-office application ${uniqueSuffix}`);
+    await newApplicationForm.getByLabel('Hotel location').selectOption(locationBId);
+    const createBPromise = applicant.page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith('/api/hotels/applications'),
+    );
+    await newApplicationForm.getByRole('button', { name: 'Create private draft' }).click();
+    const createBResponse = await createBPromise;
+    await expectStatus(createBResponse, 201, 'Applicant creates office B draft');
+    const createdB = (await createBResponse.json()) as CreateApplicationResponse;
+    const cardB = applicant.page
+      .locator('article.application-card')
+      .filter({ has: applicant.page.getByRole('heading', { name: hotelNameB, exact: true }) });
+    const submitBPromise = applicant.page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith(`/api/hotels/applications/${createdB.id}/submit`),
+    );
+    await cardB.getByRole('button', { name: 'Submit this version for review' }).click();
+    await expectStatus(await submitBPromise, 201, 'Applicant submits office B draft');
+    const submittedBRead = await authenticatedGet(applicant, `hotels/applications/${createdB.id}`);
+    await expectStatus(submittedBRead, 200, 'Applicant reads submitted B');
+    const submittedB = (await submittedBRead.json()) as { location: HotelLocation };
+    expect(submittedB.location.id).toBe(locationBId);
+    const hierarchyB = submittedB.location.hierarchy.map((node) => node.label).join(' / ');
+
     const bureau = await signInThroughKeycloak(
       browser,
       hotelE2eConfig.identities.bureauReviewer,
@@ -335,6 +387,81 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
       .filter({ has: bureau.page.getByRole('heading', { name: hotelName }) });
     await expect(bureauCaseCard.locator('.status')).toHaveText('in review');
     await expect(bureau.page.getByText(applicantNotes)).toBeVisible();
+    await expect(bureauCaseCard.getByLabel('Submitted location')).toContainText(hierarchyA);
+    await expect(bureau.page.getByRole('heading', { name: hotelNameB, exact: true })).toHaveCount(
+      0,
+    );
+
+    const bureauB = await signInThroughKeycloak(
+      browser,
+      hotelE2eConfig.identities.bureauReviewerB,
+      '/bureau/hotel-cases',
+    );
+    actors.push(bureauB);
+    await expectUiApiResponse(bureauB.apiResponses, 'GET', 'bureau/hotel-cases', 200);
+    const bureauBCard = bureauB.page
+      .locator('article.application-card')
+      .filter({ has: bureauB.page.getByRole('heading', { name: hotelNameB, exact: true }) });
+    await expect(bureauBCard.getByLabel('Submitted location')).toContainText(hierarchyB);
+    await expect(bureauB.page.getByRole('heading', { name: hotelName, exact: true })).toHaveCount(
+      0,
+    );
+    const queueAResponse = await authenticatedGet(bureau, 'bureau/hotel-cases');
+    const queueBResponse = await authenticatedGet(bureauB, 'bureau/hotel-cases');
+    await expectStatus(queueAResponse, 200, 'Office A queue');
+    await expectStatus(queueBResponse, 200, 'Office B queue');
+    const queueA = (await queueAResponse.json()) as { items: HotelBureauCaseResponse[] };
+    const queueB = (await queueBResponse.json()) as { items: HotelBureauCaseResponse[] };
+    expect(queueA.items.some((item) => item.id === createdB.id)).toBe(false);
+    expect(queueB.items.some((item) => item.id === created.id)).toBe(false);
+    const caseA = queueA.items.find((item) => item.id === created.id);
+    const caseB = queueB.items.find((item) => item.id === createdB.id);
+    if (!caseA || !caseB) throw new Error('Both offices must receive their own submitted case.');
+    for (const [wrongActor, target, marker] of [
+      [bureau, caseB, hotelNameB],
+      [bureauB, caseA, hotelName],
+    ] as const) {
+      const knownCaseRoute = `bureau/hotel-cases/${encodeURIComponent(target.caseId)}`;
+      const deniedRead = await authenticatedGet(wrongActor, knownCaseRoute);
+      await expectStatus(deniedRead, 404, 'Wrong office known-case read is non-enumerating');
+      await expectPrivateBodyDoesNotContain(
+        deniedRead,
+        marker,
+        'Wrong office case read leaked private content.',
+      );
+      const deniedDecision = await wrongActor.page.request.post(
+        apiRequestUrl(`${knownCaseRoute}/decision`),
+        {
+          headers: { authorization: `Bearer ${wrongActor.accessToken}` },
+          data: {
+            expectedVersion: target.version,
+            decision: 'approve',
+            reason: 'Synthetic cross-office denial check.',
+          },
+        },
+      );
+      expect([403, 404], 'Wrong office decision must be denied').toContain(deniedDecision.status());
+      await expectPrivateBodyDoesNotContain(
+        deniedDecision,
+        marker,
+        'Wrong office decision leaked private content.',
+      );
+    }
+    await bureauBCard.getByLabel('Decision for this submitted version').selectOption('approve');
+    await bureauBCard.getByLabel('Reason').fill('Synthetic office B review result.');
+    const decisionBPromise = bureauB.page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith(
+          `/api/bureau/hotel-cases/${caseB.caseId}/decision`,
+        ),
+    );
+    await bureauBCard.getByRole('button', { name: 'Record Bureau decision' }).click();
+    await expectStatus(
+      await decisionBPromise,
+      201,
+      'Authorized office B decision after denied attempt',
+    );
     const bureauOwnerAttempt = await authenticatedGet(bureau, applicationRoute);
     await expectStatus(
       bureauOwnerAttempt,
@@ -383,6 +510,30 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
     await expect(
       administratorApplicationCard.getByText(/Synthetic Bureau outcome: approve/i),
     ).toBeVisible();
+    await expect(administratorApplicationCard.getByLabel('Submitted location')).toContainText(
+      hierarchyA,
+    );
+    const administratorCardB = administrator.page
+      .locator('article.application-card')
+      .filter({ has: administrator.page.getByRole('heading', { name: hotelNameB, exact: true }) });
+    await expect(administratorCardB.getByLabel('Submitted location')).toContainText(hierarchyB);
+    await administratorCardB
+      .getByLabel('Private platform admission decision')
+      .selectOption('admit');
+    await administratorCardB
+      .getByLabel('Reason', { exact: true })
+      .fill('Synthetic office B private admission.');
+    const admissionBPromise = administrator.page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith(
+          `/api/admin/hotel-admissions/${createdB.id}/decision`,
+        ),
+    );
+    await administratorCardB
+      .getByRole('button', { name: 'Record private admission decision' })
+      .click();
+    await expectStatus(await admissionBPromise, 201, 'Office B private admission');
     const administratorOwnerAttempt = await authenticatedGet(administrator, applicationRoute);
     await expectStatus(
       administratorOwnerAttempt,
@@ -452,6 +603,13 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
       .filter({ has: returningApplicant.page.getByRole('heading', { name: hotelName }) });
     await expect(applicationCard).toContainText('approved');
     await expect(applicationCard).toContainText('admitted');
+    await expect(applicationCard.getByLabel('Submitted location')).toContainText(hierarchyA);
+    await applicationCard.getByRole('button', { name: 'View admitted workspace' }).click();
+    await expect(
+      applicationCard
+        .getByLabel('Admitted hotel workspace details')
+        .getByLabel('Submitted location'),
+    ).toContainText(hierarchyA);
     await applicationCard.getByRole('link', { name: 'Direct workspace link' }).click();
     await expectUiApiResponse(
       returningApplicant.apiResponses,
@@ -463,11 +621,44 @@ test('applicant submission, scoped Bureau review, Administrator admission, and p
       returningApplicant.page.getByRole('heading', { name: 'Admitted hotel workspace' }),
     ).toBeVisible();
     await expect(returningApplicant.page.getByText(hotelName)).toBeVisible();
+    await expect(returningApplicant.page.getByLabel('Submitted location')).toContainText(
+      hierarchyA,
+    );
     await expect(
       returningApplicant.page.getByText(
         /No listing, booking, subscription, or payment is enabled/i,
       ),
     ).toBeVisible();
+    await returningApplicant.page.goto('/hotels');
+    const returningCardB = returningApplicant.page.locator('article.application-card').filter({
+      has: returningApplicant.page.getByRole('heading', { name: hotelNameB, exact: true }),
+    });
+    await expect(returningCardB).toContainText('admitted');
+    await expect(returningCardB.getByLabel('Submitted location')).toContainText(hierarchyB);
+    await returningCardB.getByRole('button', { name: 'View admitted workspace' }).click();
+    await expect(
+      returningCardB
+        .getByLabel('Admitted hotel workspace details')
+        .getByLabel('Submitted location'),
+    ).toContainText(hierarchyB);
+    await returningCardB.getByRole('link', { name: 'Direct workspace link' }).click();
+    await expect(returningApplicant.page.getByLabel('Submitted location')).toContainText(
+      hierarchyB,
+    );
+    for (const [id, location] of [
+      [created.id, submittedA.location],
+      [createdB.id, submittedB.location],
+    ] as const) {
+      const admittedRead = await authenticatedGet(returningApplicant, `hotels/workspace/${id}`);
+      await expectStatus(admittedRead, 200, 'Admitted location snapshot remains available');
+      expect(((await admittedRead.json()) as { location: HotelLocation }).location).toEqual(
+        location,
+      );
+      for (const nonOwner of [bureau, bureauB, administrator]) {
+        const denied = await authenticatedGet(nonOwner, `hotels/workspace/${id}`);
+        await expectStatus(denied, 404, 'Admitted workspace remains private across both offices');
+      }
+    }
   } finally {
     await Promise.all(actors.map((actor) => actor.close()));
   }

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { HotelLocationDetails } from '../../../components/hotel-location';
 import { getAdmittedHotelWorkspace } from '@ethio-tour/api-client';
 import {
   HotelPilotFrame,
@@ -89,6 +90,10 @@ export default function AdmittedHotelWorkspacePage({
                 enabled.
               </p>
               {workspace.content.applicantNotes && <p>{workspace.content.applicantNotes}</p>}
+              <HotelLocationDetails
+                location={workspace.location}
+                submitted={workspace.status !== 'draft' && workspace.currentVersionId != null}
+              />
               <div className="decision-details">
                 <p>
                   <strong>Administrator admission:</strong>{' '}

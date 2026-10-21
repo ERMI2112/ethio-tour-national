@@ -15,6 +15,14 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
+// Structurally matches the public contract without adding a runtime package dependency.
+export interface HotelLocation {
+  id: string;
+  label: string;
+  parentId: string | null;
+  hierarchy: { id: string; label: string; parentId: string | null }[];
+}
+
 export const platformMetadata = pgTable('platform_metadata', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
@@ -80,6 +88,29 @@ export const organizations = pgTable(
   ],
 );
 
+export const hotelLocations = pgTable('hotel_locations', {
+  administrativeUnitId: text('administrative_unit_id')
+    .primaryKey()
+    .references(() => administrativeUnits.id),
+  enabled: boolean('enabled').default(true).notNull(),
+});
+
+export const hotelLocationRoutes = pgTable(
+  'hotel_location_routes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    locationUnitId: text('location_unit_id')
+      .notNull()
+      .references(() => hotelLocations.administrativeUnitId),
+    bureauOrganizationId: text('bureau_organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    enabled: boolean('enabled').default(true).notNull(),
+  },
+  // Deliberately non-unique: multiple enabled routes must fail closed in the backend.
+  (table) => [index('hotel_location_routes_location_idx').on(table.locationUnitId)],
+);
+
 export const hotelApplications = pgTable(
   'hotel_applications',
   {
@@ -88,7 +119,7 @@ export const hotelApplications = pgTable(
       .notNull()
       .references(() => userProfiles.id),
     draftContent: jsonb('draft_content')
-      .$type<{ claimedHotelName: string; applicantNotes: string }>()
+      .$type<{ claimedHotelName: string; applicantNotes: string; administrativeUnitId?: string }>()
       .notNull(),
     status: text('status').default('draft').notNull(),
     admissionStatus: text('admission_status').default('not_eligible').notNull(),
@@ -131,8 +162,12 @@ export const hotelApplicationVersions = pgTable(
       .references(() => hotelApplications.id),
     versionNumber: integer('version_number').notNull(),
     content: jsonb('content')
-      .$type<{ claimedHotelName: string; applicantNotes: string }>()
+      .$type<{ claimedHotelName: string; applicantNotes: string; administrativeUnitId?: string }>()
       .notNull(),
+    locationUnitId: text('location_unit_id').references(() => administrativeUnits.id),
+    locationSnapshot: jsonb('location_snapshot').$type<HotelLocation>(),
+    bureauOrganizationId: text('bureau_organization_id').references(() => organizations.id),
+    scopeUnitId: text('scope_unit_id').references(() => administrativeUnits.id),
     submittedByProfileId: uuid('submitted_by_profile_id')
       .notNull()
       .references(() => userProfiles.id),
@@ -145,6 +180,14 @@ export const hotelApplicationVersions = pgTable(
     ),
     uniqueIndex('hotel_application_versions_app_id_uq').on(table.applicationId, table.id),
     check('hotel_application_versions_number_check', sql`${table.versionNumber} > 0`),
+    check(
+      'hotel_application_versions_routing_complete_check',
+      sql`(${table.locationUnitId} is null and ${table.locationSnapshot} is null and ${table.bureauOrganizationId} is null and ${table.scopeUnitId} is null) or (${table.locationUnitId} is not null and ${table.locationSnapshot} is not null and ${table.bureauOrganizationId} is not null and ${table.scopeUnitId} is not null)`,
+    ),
+    check(
+      'hotel_application_versions_routing_consistency_check',
+      sql`${table.locationUnitId} is null or (${table.scopeUnitId} = ${table.locationUnitId} and jsonb_typeof(${table.locationSnapshot}) = 'object' and (${table.locationSnapshot}->>'id' = ${table.locationUnitId}) is true and (not (${table.locationSnapshot} ? 'administrativeUnitId') or (${table.locationSnapshot}->>'administrativeUnitId' = ${table.locationUnitId}) is true) and (${table.content}->>'administrativeUnitId' = ${table.locationUnitId}) is true)`,
+    ),
     index('hotel_application_versions_submitted_idx').on(table.submittedAt),
   ],
 );
@@ -586,6 +629,8 @@ export const schema = {
   administrativeUnits,
   administrativeUnitPaths,
   organizations,
+  hotelLocations,
+  hotelLocationRoutes,
   hotelApplications,
   hotelApplicationVersions,
   hotelBureauCases,

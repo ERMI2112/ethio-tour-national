@@ -10,6 +10,7 @@ import {
 } from '@ethio-tour/backend-domain';
 
 import { KeycloakAuthGuard } from '../auth/keycloak-auth.guard';
+import { HotelRequestBodyGuard } from './hotel-request-body.guard';
 import {
   AdministratorHotelAdmissionsController,
   BureauHotelCasesController,
@@ -44,6 +45,7 @@ class HotelOnboardingRuntime implements OnModuleDestroy {
   providers: [
     HotelOnboardingRuntime,
     KeycloakAuthGuard,
+    HotelRequestBodyGuard,
     {
       provide: HotelOnboardingService,
       useFactory: (runtime: HotelOnboardingRuntime) => runtime.service,

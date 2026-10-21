@@ -7,6 +7,8 @@ import {
   decideHotelApplication,
   getAdmittedHotelWorkspace,
   getApiHealth,
+  getHotelLocations,
+  getHotelBureauCase,
   getPublicDestinations,
 } from './index';
 
@@ -14,6 +16,31 @@ describe('API client', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it('loads only minimal server-owned hotel location labels through the protected API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] })));
+    vi.stubGlobal('fetch', fetchMock);
+    await getHotelLocations({ apiBaseUrl: 'http://api:4000/api', accessToken: 'synthetic-token' });
+    expect(fetchMock).toHaveBeenCalledWith('http://api:4000/api/hotels/locations', {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { authorization: 'Bearer synthetic-token' },
+    });
+  });
+
+  it('encodes a private Bureau case ID without choosing an office or scope', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    await getHotelBureauCase('case/1', {
+      apiBaseUrl: 'http://api:4000/api',
+      accessToken: 'synthetic-token',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('http://api:4000/api/bureau/hotel-cases/case%2F1', {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { authorization: 'Bearer synthetic-token' },
+    });
   });
 
   it('prefers the explicit public API URL for browser requests over the internal API URL', async () => {

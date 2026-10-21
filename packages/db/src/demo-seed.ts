@@ -12,6 +12,7 @@ export type DemoActorKey =
   | `kebele-gondar.${DemoRole}`
   | `kebele-lalibela.${DemoRole}`
   | 'hotel-bureau.reviewer'
+  | 'hotel-bureau-b.reviewer'
   | 'platform.hotel-admin';
 
 interface UnitDefinition {
@@ -146,6 +147,15 @@ const hotelPilotScopes: ScopeDefinition[] = [
     organizationType: 'administrative',
   },
   {
+    key: 'hotel-bureau-b',
+    unitId: 'demo-unit-region-b',
+    organizationId: 'demo-org-hotel-bureau-b',
+    organizationName: 'Synthetic Hotel Pilot Bureau B Review Organization',
+    level: 'regional',
+    includeDescendants: true,
+    organizationType: 'administrative',
+  },
+  {
     key: 'platform',
     unitId: null,
     organizationId: 'demo-org-platform-admin',
@@ -174,7 +184,12 @@ const capabilitiesByRole: Record<DemoRole, readonly string[]> = {
 const demoRoles: readonly DemoRole[] = ['editor', 'reviewer', 'publisher'];
 export const demoActorKeys: readonly DemoActorKey[] = scopes
   .flatMap((scope) => demoRoles.map((role) => `${scope.key}.${role}` as DemoActorKey))
-  .concat(['hotel-bureau.reviewer', 'platform.hotel-admin']);
+  .concat(['hotel-bureau.reviewer', 'hotel-bureau-b.reviewer', 'platform.hotel-admin']);
+
+const hotelRoutes = [
+  ['demo-unit-woreda-gondar', 'demo-org-hotel-bureau'],
+  ['demo-unit-woreda-lalibela', 'demo-org-hotel-bureau-b'],
+] as const;
 
 export async function seedSyntheticRegistryDemo(
   client: DatabaseClient,
@@ -264,13 +279,52 @@ export async function seedSyntheticRegistryDemo(
       }
     }
 
+    // Serialize route initialization so concurrent seeds cannot create duplicate routes.
+    await transaction.unsafe(
+      'LOCK TABLE hotel_locations, hotel_location_routes IN SHARE ROW EXCLUSIVE MODE',
+    );
+    for (const [unitId, organizationId] of hotelRoutes) {
+      await transaction.unsafe(
+        `INSERT INTO hotel_locations (administrative_unit_id, enabled)
+         VALUES ($1, true) ON CONFLICT (administrative_unit_id) DO NOTHING`,
+        [unitId],
+      );
+      const [location] = await transaction.unsafe<Record<string, unknown>[]>(
+        'SELECT enabled FROM hotel_locations WHERE administrative_unit_id = $1',
+        [unitId],
+      );
+      if (location?.enabled !== true) {
+        throw new Error('A synthetic hotel location conflicts with existing data.');
+      }
+      const routes = await transaction.unsafe<Record<string, unknown>[]>(
+        'SELECT bureau_organization_id, enabled FROM hotel_location_routes WHERE location_unit_id = $1',
+        [unitId],
+      );
+      if (routes.length === 0) {
+        await transaction.unsafe(
+          `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id, enabled)
+           VALUES ($1, $2, true)`,
+          [unitId, organizationId],
+        );
+      } else if (
+        routes.length !== 1 ||
+        routes[0]?.bureau_organization_id !== organizationId ||
+        routes[0]?.enabled !== true
+      ) {
+        throw new Error(
+          'A synthetic hotel route is ambiguous, inactive, or conflicts with existing data.',
+        );
+      }
+    }
+
     for (const [actorKey, subjectId] of assignedActors) {
       const [scopeKey, roleValue] = actorKey.split('.') as [string, string];
       const scope = [...scopes, ...hotelPilotScopes].find(
         (candidate) => candidate.key === scopeKey,
       );
       if (!scope) throw new Error('A demo actor assignment is not recognized.');
-      const isHotelBureauReviewer = actorKey === 'hotel-bureau.reviewer';
+      const isHotelBureauReviewer =
+        actorKey === 'hotel-bureau.reviewer' || actorKey === 'hotel-bureau-b.reviewer';
       const isHotelAdministrator = actorKey === 'platform.hotel-admin';
       if (
         !isHotelBureauReviewer &&
@@ -285,17 +339,18 @@ export async function seedSyntheticRegistryDemo(
           INSERT INTO user_profiles (external_issuer, external_subject_id)
           VALUES ($1, $2)
           ON CONFLICT (external_issuer, external_subject_id) DO NOTHING
-          RETURNING id
+          RETURNING id, active
         `,
         [issuer, subjectId],
       );
       const [existingProfile] = profile
         ? [profile]
         : await transaction.unsafe<Record<string, unknown>[]>(
-            'SELECT id FROM user_profiles WHERE external_issuer = $1 AND external_subject_id = $2',
+            'SELECT id, active FROM user_profiles WHERE external_issuer = $1 AND external_subject_id = $2',
             [issuer, subjectId],
           );
       if (!existingProfile?.id) throw new Error('A demo user profile could not be resolved.');
+      if (existingProfile.active !== true) throw new Error('A demo user profile is inactive.');
       const profileId = stringValue(existingProfile.id);
 
       const [membership] = await transaction.unsafe<Record<string, unknown>[]>(
@@ -303,17 +358,18 @@ export async function seedSyntheticRegistryDemo(
           INSERT INTO memberships (user_profile_id, organization_id, label)
           VALUES ($1, $2, $3)
           ON CONFLICT (user_profile_id, organization_id) DO NOTHING
-          RETURNING id
+          RETURNING id, active
         `,
         [profileId, scope.organizationId, `Synthetic demo ${role}`],
       );
       const [existingMembership] = membership
         ? [membership]
         : await transaction.unsafe<Record<string, unknown>[]>(
-            'SELECT id FROM memberships WHERE user_profile_id = $1 AND organization_id = $2',
+            'SELECT id, active FROM memberships WHERE user_profile_id = $1 AND organization_id = $2',
             [profileId, scope.organizationId],
           );
       if (!existingMembership?.id) throw new Error('A demo membership could not be resolved.');
+      if (existingMembership.active !== true) throw new Error('A demo membership is inactive.');
       const membershipId = stringValue(existingMembership.id);
 
       const capabilities = isHotelBureauReviewer
@@ -328,18 +384,19 @@ export async function seedSyntheticRegistryDemo(
               membership_id, capability, organization_id, active, demo_only, production_decision_enabled
             ) VALUES ($1, $2, $3, true, true, false)
             ON CONFLICT (membership_id, capability, organization_id) DO NOTHING
-            RETURNING id, demo_only, production_decision_enabled
+            RETURNING id, active, demo_only, production_decision_enabled
           `,
           [membershipId, capability, scope.organizationId],
         );
         const [existingGrant] = grant
           ? [grant]
           : await transaction.unsafe<Record<string, unknown>[]>(
-              'SELECT id, demo_only, production_decision_enabled FROM access_grants WHERE membership_id = $1 AND capability = $2 AND organization_id = $3',
+              'SELECT id, active, demo_only, production_decision_enabled FROM access_grants WHERE membership_id = $1 AND capability = $2 AND organization_id = $3',
               [membershipId, capability, scope.organizationId],
             );
         if (
           !existingGrant?.id ||
+          existingGrant.active !== true ||
           existingGrant.demo_only !== true ||
           existingGrant.production_decision_enabled !== false
         ) {
@@ -393,11 +450,12 @@ function validateActorAssignments(assignments: readonly [DemoActorKey, string][]
     subjects.add(subjectId);
     subjectsByScope.set(scopeKey, subjects);
   }
-  const bureauReviewer = assignments.find(([key]) => key === 'hotel-bureau.reviewer')?.[1];
-  const platformAdmin = assignments.find(([key]) => key === 'platform.hotel-admin')?.[1];
-  if (bureauReviewer && platformAdmin && bureauReviewer === platformAdmin) {
+  const hotelActors = assignments.filter(([key]) =>
+    ['hotel-bureau.reviewer', 'hotel-bureau-b.reviewer', 'platform.hotel-admin'].includes(key),
+  );
+  if (new Set(hotelActors.map(([, subject]) => subject)).size !== hotelActors.length) {
     throw new Error(
-      'The synthetic Bureau reviewer and platform Administrator must be distinct actors.',
+      'The synthetic Bureau reviewers and platform Administrator must be distinct actors.',
     );
   }
 }

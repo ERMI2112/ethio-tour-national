@@ -1,9 +1,23 @@
 import { Type } from 'class-transformer';
-import { IsDefined, IsIn, IsInt, IsString, MaxLength, Min, ValidateNested } from 'class-validator';
+import {
+  IsDefined,
+  IsIn,
+  IsInt,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
 
 import type { HotelAdmissionDecision, HotelApplicationDecision } from '@ethio-tour/contracts';
 
 export class HotelApplicationContentDto {
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsString()
+  @MaxLength(200)
+  administrativeUnitId?: string;
+
   @IsDefined()
   @IsString()
   @MaxLength(160)

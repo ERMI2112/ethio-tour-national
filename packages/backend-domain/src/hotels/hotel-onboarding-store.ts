@@ -4,6 +4,7 @@ import type {
   HotelApplicationContent,
   HotelApplicationResponse,
   HotelBureauCaseResponse,
+  HotelLocation,
 } from '@ethio-tour/contracts';
 
 import type { RegistryActor } from '../registry/registry-store';
@@ -28,7 +29,6 @@ export interface HotelBureauRoutingPolicy {
 export interface HotelPilotSettings {
   enabled: boolean;
   production: boolean;
-  bureauRouting: HotelBureauRoutingPolicy;
   administratorOrganizationId: string | null;
 }
 
@@ -39,6 +39,8 @@ export interface HotelDecisionTarget {
 }
 
 export interface HotelOnboardingTransaction {
+  listLocations(): Promise<HotelLocation[]>;
+  getAdministrativeUnitAncestorIds(unitId: string): Promise<string[]>;
   getAuthorizationContext(actor: RegistryActor): Promise<AuthorizationContext>;
   createApplication(
     actor: RegistryActor,
@@ -59,10 +61,10 @@ export interface HotelOnboardingTransaction {
     actor: RegistryActor,
     applicationId: string,
     expectedVersion: number,
-    route: HotelBureauRoute,
   ): Promise<HotelApplicationResponse | null>;
   getBureauDecisionTarget(caseId: string): Promise<HotelDecisionTarget | null>;
-  listBureauCases(route: HotelBureauRoute): Promise<HotelBureauCaseResponse[]>;
+  listBureauCases(actor: RegistryActor): Promise<HotelBureauCaseResponse[]>;
+  getBureauCase(actor: RegistryActor, caseId: string): Promise<HotelBureauCaseResponse | null>;
   decideBureauCase(
     actor: RegistryActor,
     caseId: string,

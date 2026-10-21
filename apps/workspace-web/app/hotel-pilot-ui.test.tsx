@@ -2,7 +2,8 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { HotelLocation } from '@ethio-tour/contracts';
 import { HotelApplicantScreen } from './hotels/applicant-screen';
 import { BureauHotelCasesScreen } from './bureau/hotel-cases/screen';
 import { AdminHotelAdmissionsScreen } from './admin/hotel-admissions/screen';
@@ -23,6 +24,7 @@ import { ApiClientError } from '@ethio-tour/api-client';
 const mockApiClient = vi.hoisted(() => ({
   API_UNAUTHORIZED_EVENT: 'ethio-tour:unauthorized',
   getMyHotelApplications: vi.fn(),
+  getHotelLocations: vi.fn(),
   getHotelApplication: vi.fn(),
   createHotelApplication: vi.fn(),
   submitHotelApplication: vi.fn(),
@@ -57,6 +59,7 @@ const mockApplication = (
   currentVersion: 3,
   currentVersionId: 'revision-3',
   content: { claimedHotelName: 'Synthetic sample hotel', applicantNotes: 'Sample notes' },
+  location: null,
   bureauDecision: {
     decision: 'approve',
     applicationVersion: 3,
@@ -98,6 +101,24 @@ const mockBureauCase = (
   ...overrides,
 });
 
+const makeLocation = (name: string): HotelLocation => ({
+  id: `demo-unit-woreda-${name}`,
+  label: `Synthetic ${name}`,
+  parentId: 'synthetic-region',
+  hierarchy: [
+    { id: 'synthetic-region', label: 'Synthetic region', parentId: null },
+    { id: `demo-unit-woreda-${name}`, label: `Synthetic ${name}`, parentId: 'synthetic-region' },
+  ],
+});
+const locations: [HotelLocation, HotelLocation] = [
+  makeLocation('gondar'),
+  makeLocation('lalibela'),
+];
+
+beforeEach(() => {
+  mockApiClient.getHotelLocations.mockReset().mockResolvedValue({ items: locations });
+});
+
 describe('hotel pilot screens - signed out state', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -121,6 +142,7 @@ describe('hotel pilot screens - signed out state', () => {
     }
 
     expect(mockApiClient.getMyHotelApplications).not.toHaveBeenCalled();
+    expect(mockApiClient.getHotelLocations).not.toHaveBeenCalled();
     expect(mockApiClient.getBureauHotelCases).not.toHaveBeenCalled();
     expect(mockApiClient.getHotelAdmissionQueue).not.toHaveBeenCalled();
     expect(mockApiClient.getAdmittedHotelWorkspace).not.toHaveBeenCalled();
@@ -133,6 +155,305 @@ describe('hotel pilot screens - signed out state', () => {
     expect(markup).toContain('Authenticated workspace session unavailable');
     expect(mockApiClient.getAdmittedHotelWorkspace).not.toHaveBeenCalled();
   });
+});
+
+describe('hotel location selection, snapshots, and error retention', () => {
+  const session = (children: React.ReactNode) => (
+    <HotelPilotSessionProvider accessToken="test-session">{children}</HotelPilotSessionProvider>
+  );
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiClient.getMyHotelApplications.mockReset().mockResolvedValue({ items: [] });
+  });
+  afterEach(cleanup);
+
+  it('retains create inputs and selection after failure, retries, and resets only after success', async () => {
+    mockApiClient.createHotelApplication
+      .mockReset()
+      .mockRejectedValueOnce(new ApiClientError('invalid', 400))
+      .mockResolvedValueOnce(
+        mockApplication({
+          id: 'created',
+          status: 'draft',
+          currentVersionId: null,
+          content: {
+            claimedHotelName: 'Entered hotel',
+            applicantNotes: 'Entered notes',
+            administrativeUnitId: locations[0].id,
+          },
+        }),
+      );
+    render(session(<HotelApplicantScreen />));
+    const form = within(screen.getByRole('region', { name: 'Start an application' }));
+    await waitFor(() =>
+      expect(form.getByLabelText('Hotel location').querySelectorAll('option')).toHaveLength(3),
+    );
+    fireEvent.change(form.getByLabelText('Hotel name stated in this application'), {
+      target: { value: 'Entered hotel' },
+    });
+    fireEvent.change(form.getByLabelText('Application notes'), {
+      target: { value: 'Entered notes' },
+    });
+    fireEvent.change(form.getByLabelText('Hotel location'), { target: { value: locations[0].id } });
+    expect(form.getByLabelText('Location preview').textContent).toContain('Applicant-provided');
+    expect(form.getByLabelText('Location preview').textContent).toContain(
+      'Synthetic region / Synthetic gondar',
+    );
+    fireEvent.click(form.getByRole('button', { name: 'Create private draft' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('HTTP 400'));
+    expect(
+      (form.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
+    ).toBe('Entered hotel');
+    expect((form.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
+      'Entered notes',
+    );
+    expect((form.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(
+      locations[0].id,
+    );
+    fireEvent.click(form.getByRole('button', { name: 'Create private draft' }));
+    await waitFor(() => expect(mockApiClient.createHotelApplication).toHaveBeenCalledTimes(2));
+    expect(mockApiClient.createHotelApplication).toHaveBeenLastCalledWith(
+      {
+        content: {
+          claimedHotelName: 'Entered hotel',
+          applicantNotes: 'Entered notes',
+          administrativeUnitId: locations[0].id,
+        },
+      },
+      { accessToken: 'test-session' },
+    );
+    await waitFor(() =>
+      expect((form.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(''),
+    );
+    expect(
+      (form.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
+    ).toBe('');
+  });
+
+  it('retries directory loading without clearing typed inputs and shows an empty directory honestly', async () => {
+    mockApiClient.getHotelLocations
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ items: [] });
+    render(session(<HotelApplicantScreen />));
+    const form = within(screen.getByRole('region', { name: 'Start an application' }));
+    fireEvent.change(form.getByLabelText('Application notes'), {
+      target: { value: 'Keep these notes' },
+    });
+    await waitFor(() =>
+      expect(form.getByRole('alert').textContent).toContain('connection and retry'),
+    );
+    fireEvent.click(form.getByRole('button', { name: 'Retry locations' }));
+    await waitFor(() =>
+      expect(form.getByText('No selectable locations are available.')).toBeDefined(),
+    );
+    expect((form.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
+      'Keep these notes',
+    );
+  });
+
+  it('requires a saved selection before submitting a legacy draft and retains correction inputs on save and submit errors', async () => {
+    const legacy = mockApplication({ status: 'draft', currentVersionId: null });
+    mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [legacy] });
+    mockApiClient.createHotelApplicationRevision
+      .mockReset()
+      .mockRejectedValueOnce(new ApiClientError('invalid', 400))
+      .mockResolvedValueOnce({
+        ...legacy,
+        content: {
+          claimedHotelName: 'Corrected',
+          applicantNotes: 'Keep correction',
+          administrativeUnitId: locations[1].id,
+        },
+        version: 5,
+      });
+    mockApiClient.submitHotelApplication
+      .mockReset()
+      .mockRejectedValueOnce(new ApiClientError('conflict', 409));
+    render(session(<HotelApplicantScreen />));
+    const article = within(await screen.findByRole('article'));
+    expect(article.getByText('No location recorded.')).toBeDefined();
+    const submit = article.getByRole('button', {
+      name: 'Submit this version for review',
+    }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    await waitFor(() =>
+      expect(article.getByLabelText('Hotel location').querySelectorAll('option')).toHaveLength(3),
+    );
+    fireEvent.change(article.getByLabelText('Hotel name stated in this application'), {
+      target: { value: 'Corrected' },
+    });
+    fireEvent.change(article.getByLabelText('Application notes'), {
+      target: { value: 'Keep correction' },
+    });
+    fireEvent.change(article.getByLabelText('Hotel location'), {
+      target: { value: locations[1].id },
+    });
+    fireEvent.click(article.getByRole('button', { name: 'Save private draft' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('HTTP 400'));
+    expect(
+      (article.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
+    ).toBe('Corrected');
+    expect((article.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(
+      locations[1].id,
+    );
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(article.getByRole('button', { name: 'Save private draft' }));
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('Refresh the list'),
+    );
+    expect((article.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
+      'Keep correction',
+    );
+    expect((article.getByLabelText('Hotel location') as HTMLSelectElement).value).toBe(
+      locations[1].id,
+    );
+  });
+
+  it('explains unavailable routing and preserves saved and unsaved draft fields', async () => {
+    const draft = mockApplication({
+      status: 'draft',
+      currentVersionId: null,
+      content: {
+        claimedHotelName: 'Saved draft',
+        applicantNotes: 'Saved notes',
+        administrativeUnitId: locations[0].id,
+      },
+      location: locations[0],
+    });
+    mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
+    mockApiClient.submitHotelApplication
+      .mockReset()
+      .mockRejectedValueOnce(new ApiClientError('unavailable', 503));
+    render(session(<HotelApplicantScreen />));
+    const card = within(await screen.findByRole('article'));
+    fireEvent.change(card.getByLabelText('Application notes'), {
+      target: { value: 'Unsaved correction' },
+    });
+    fireEvent.click(card.getByRole('button', { name: 'Submit this version for review' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain(
+        'Review routing is currently unavailable',
+      ),
+    );
+    expect(screen.getByRole('alert').textContent).toContain('Your private draft was not submitted');
+    expect((card.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
+      'Unsaved correction',
+    );
+    expect(card.getByText('Saved notes', { selector: 'p' })).toBeDefined();
+    expect(mockApiClient.createHotelApplicationRevision).not.toHaveBeenCalled();
+  });
+
+  it('does not label a post-approval draft location as submitted when the previous submission ID remains', async () => {
+    const draft = mockApplication({
+      status: 'draft',
+      currentVersionId: 'previous-approved-submission',
+      location: locations[1],
+      content: {
+        claimedHotelName: 'Changed-location draft',
+        applicantNotes: 'New draft after approval',
+        administrativeUnitId: locations[1].id,
+      },
+    });
+    mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
+    render(session(<HotelApplicantScreen />));
+    const card = within(await screen.findByRole('article'));
+    expect(card.queryByLabelText('Submitted location')).toBeNull();
+    expect(card.queryByText(/Submitted location/)).toBeNull();
+    expect(card.getAllByLabelText('Location preview')[0]?.textContent).toContain(
+      'Synthetic region / Synthetic lalibela',
+    );
+    expect(card.getAllByLabelText('Location preview')[0]?.textContent).toContain(
+      'Applicant-provided',
+    );
+    expect(card.getByText(/previous submitted version 3/)).toBeDefined();
+  });
+
+  it('shows the DTO snapshot in every private view independently of directory labels or a correction selection', async () => {
+    const snapshot: HotelLocation = {
+      ...locations[0],
+      hierarchy: [
+        { ...locations[0].hierarchy[0]!, label: 'Submitted region' },
+        { ...locations[0].hierarchy[1]!, label: 'Submitted town' },
+      ],
+    };
+    const application = mockAdmittedApplication({
+      location: snapshot,
+      content: {
+        claimedHotelName: 'Snapshot hotel',
+        applicantNotes: '',
+        administrativeUnitId: locations[0].id,
+      },
+    });
+    mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [application] });
+    mockApiClient.getAdmittedHotelWorkspace.mockResolvedValue(application);
+    const applicant = render(session(<HotelApplicantScreen />));
+    await screen.findByText('Snapshot hotel');
+    expect(screen.getByLabelText('Submitted location').textContent).toContain(
+      'Submitted region / Submitted town',
+    );
+    fireEvent.change(
+      screen.getByLabelText('Hotel location', { selector: `#hotel-location-${application.id}` }),
+      { target: { value: locations[1].id } },
+    );
+    expect(screen.getByLabelText('Submitted location').textContent).toContain('Submitted town');
+    fireEvent.click(screen.getByRole('button', { name: 'View admitted workspace' }));
+    await waitFor(() => expect(screen.getAllByLabelText('Submitted location')).toHaveLength(2));
+    for (const element of screen.getAllByLabelText('Submitted location'))
+      expect(element.textContent).toContain('Submitted town');
+    applicant.unmount();
+    mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
+      items: [mockBureauCase({ ...application })],
+    });
+    mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({ items: [application] });
+    for (const element of [
+      <BureauHotelCasesScreen key="bureau" />,
+      <AdminHotelAdmissionsScreen key="admin" />,
+      <AdmittedHotelWorkspacePage
+        key="workspace"
+        params={Promise.resolve({ id: application.id })}
+      />,
+    ]) {
+      const view = render(session(element));
+      await waitFor(() =>
+        expect(screen.getByLabelText('Submitted location').textContent).toContain('Submitted town'),
+      );
+      view.unmount();
+    }
+  });
+
+  it.each(['bureau', 'admin'])(
+    'retains %s decision and reason when recording fails',
+    async (actor) => {
+      mockApiClient.getBureauHotelCases.mockResolvedValueOnce({ items: [mockBureauCase()] });
+      mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({ items: [mockApplication()] });
+      mockApiClient.decideHotelApplication.mockRejectedValueOnce(
+        new ApiClientError('conflict', 409),
+      );
+      mockApiClient.decideHotelAdmission.mockRejectedValueOnce(new ApiClientError('conflict', 409));
+      render(
+        session(actor === 'bureau' ? <BureauHotelCasesScreen /> : <AdminHotelAdmissionsScreen />),
+      );
+      const label =
+        actor === 'bureau'
+          ? 'Decision for this submitted version'
+          : 'Private platform admission decision';
+      const decision = (await screen.findByLabelText(label)) as HTMLSelectElement;
+      fireEvent.change(decision, { target: { value: actor === 'bureau' ? 'approve' : 'admit' } });
+      fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Keep my reason' } });
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: actor === 'bureau' ? 'Record Bureau decision' : 'Record private admission decision',
+        }),
+      );
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('Refresh the list'),
+      );
+      expect(decision.value).toBe(actor === 'bureau' ? 'approve' : 'admit');
+      expect((screen.getByLabelText('Reason') as HTMLTextAreaElement).value).toBe('Keep my reason');
+    },
+  );
 });
 
 describe('hotel pilot screens - authenticated applicant workflow and admitted workspace read path', () => {
@@ -153,7 +474,11 @@ describe('hotel pilot screens - authenticated applicant workflow and admitted wo
       admissionStatus: 'pending',
       currentVersion: 1,
       currentVersionId: null,
-      content: { claimedHotelName: 'Grand Lalibela Hotel', applicantNotes: 'Draft application' },
+      content: {
+        claimedHotelName: 'Grand Lalibela Hotel',
+        applicantNotes: 'Draft application',
+        administrativeUnitId: 'demo-unit-woreda-lalibela',
+      },
     });
 
     mockApiClient.getMyHotelApplications.mockResolvedValueOnce({ items: [draftApp] });

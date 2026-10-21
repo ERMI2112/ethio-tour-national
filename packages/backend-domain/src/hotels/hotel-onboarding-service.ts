@@ -8,8 +8,6 @@ import type {
 
 import type { RegistryActor } from '../registry/registry-store';
 import type {
-  HotelBureauRoute,
-  HotelBureauRoutingPolicy,
   HotelOnboardingStore,
   HotelOnboardingTransaction,
   HotelPilotSettings,
@@ -37,18 +35,11 @@ export function hotelPilotSettings(
   const production = environment.NODE_ENV === 'production';
   const syntheticRuntime =
     environment.NODE_ENV === 'development' || environment.NODE_ENV === 'test';
-  const bureauOrganizationId = environment.HOTEL_PILOT_BUREAU_ORGANIZATION_ID?.trim();
-  const bureauScopeUnitId = environment.HOTEL_PILOT_BUREAU_SCOPE_UNIT_ID?.trim();
   const administratorOrganizationId = environment.HOTEL_PILOT_ADMIN_ORGANIZATION_ID?.trim();
-  const bureauRoute =
-    syntheticRuntime && bureauOrganizationId && bureauScopeUnitId
-      ? { organizationId: bureauOrganizationId, administrativeUnitId: bureauScopeUnitId }
-      : null;
 
   return {
     enabled: environment.HOTEL_PILOT_ENABLED === 'true' && syntheticRuntime,
     production,
-    bureauRouting: singleSyntheticBureauRouting(bureauRoute),
     administratorOrganizationId: syntheticRuntime ? administratorOrganizationId || null : null,
   };
 }
@@ -58,6 +49,22 @@ export class HotelOnboardingService {
     private readonly store: HotelOnboardingStore,
     private readonly settings: HotelPilotSettings = hotelPilotSettings(),
   ) {}
+
+  async listLocations(actor: RegistryActor) {
+    this.requireEnabled();
+    return this.mutate(actor, 'hotel.locations.read', null, async (tx) => ({
+      items: await tx.listLocations(),
+    }));
+  }
+
+  async getBureauCase(actor: RegistryActor, caseId: string) {
+    this.requireEnabled();
+    return this.mutate(actor, 'hotel.application.bureau.read', caseId, async (tx) => {
+      const result = await tx.getBureauCase(actor, caseId);
+      if (!result) throw notFound();
+      return result;
+    });
+  }
 
   async createApplication(actor: RegistryActor, input: { content: HotelApplicationContent }) {
     this.requireEnabled();
@@ -103,8 +110,7 @@ export class HotelOnboardingService {
   async submitApplication(actor: RegistryActor, applicationId: string, expectedVersion: number) {
     this.requireEnabled();
     return this.mutate(actor, 'hotel.application.submit', applicationId, async (tx) => {
-      const route = await this.requireBureauRoute(applicationId);
-      const result = await tx.submitApplication(actor, applicationId, expectedVersion, route);
+      const result = await tx.submitApplication(actor, applicationId, expectedVersion);
       if (!result) throw notFound();
       return result;
     });
@@ -113,25 +119,12 @@ export class HotelOnboardingService {
   async listBureauCases(actor: RegistryActor) {
     this.requireEnabled();
     return this.mutate(actor, 'hotel.application.bureau.queue', null, async (tx) => {
-      const routes = uniqueRoutes(await this.settings.bureauRouting.routesForReview());
-      if (routes.length === 0) {
-        throw new HotelOnboardingError('unavailable', 'No synthetic Bureau routes are configured.');
-      }
-      const context = await tx.getAuthorizationContext(actor);
-      const authorizedRoutes = routes.filter(
-        (route) =>
-          authorize(context, {
-            capability: 'hotel:application:bureau:read',
-            organizationId: route.organizationId,
-            administrativeUnitId: route.administrativeUnitId,
-            resourceIsSynthetic: true,
-          }).allowed,
-      );
-      if (authorizedRoutes.length === 0) throw forbidden('missing-scope');
-
-      const items = [];
-      for (const route of authorizedRoutes) items.push(...(await tx.listBureauCases(route)));
-      return { items };
+      const access = authorize(await tx.getAuthorizationContext(actor), {
+        capability: 'hotel:application:bureau:read',
+        resourceIsSynthetic: true,
+      });
+      if (!access.allowed) throw forbidden(access.reason);
+      return { items: await tx.listBureauCases(actor) };
     });
   }
 
@@ -153,6 +146,9 @@ export class HotelOnboardingService {
         capability: 'hotel:application:bureau:decide',
         organizationId: route.organizationId,
         administrativeUnitId: route.administrativeUnitId,
+        administrativeUnitAncestorIds: await tx.getAdministrativeUnitAncestorIds(
+          route.administrativeUnitId,
+        ),
         resourceIsSynthetic: target.resourceIsSynthetic,
       });
       if (!authorization.allowed) throw forbidden(authorization.reason);
@@ -288,17 +284,6 @@ export class HotelOnboardingService {
     }
   }
 
-  private async requireBureauRoute(applicationId: string): Promise<HotelBureauRoute> {
-    const resolution = await this.settings.bureauRouting.resolveApplicationRoute(applicationId);
-    if (resolution.kind !== 'routed') {
-      throw new HotelOnboardingError(
-        'unavailable',
-        'The application has no unique server-assigned Bureau route.',
-      );
-    }
-    return resolution.route;
-  }
-
   private requireAdministratorOrganization(): string {
     const organizationId = this.settings.administratorOrganizationId;
     if (!organizationId) {
@@ -319,7 +304,14 @@ function validateContent(content: HotelApplicationContent): HotelApplicationCont
     throw invalid('Enter a hotel name of at most 160 characters.');
   if (typeof applicantNotes !== 'string' || applicantNotes.length > 2000)
     throw invalid('Applicant notes must be at most 2000 characters.');
-  return { claimedHotelName, applicantNotes };
+  const unitId = content.administrativeUnitId;
+  if (unitId !== undefined && (typeof unitId !== 'string' || !unitId.trim() || unitId.length > 200))
+    throw invalid('Enter a valid administrative unit ID.');
+  return {
+    claimedHotelName,
+    applicantNotes,
+    ...(unitId === undefined ? {} : { administrativeUnitId: unitId.trim() }),
+  };
 }
 
 function validateReason(reason: string): string {
@@ -339,19 +331,4 @@ function forbidden(reason: string): HotelOnboardingError {
 
 function notFound(): HotelOnboardingError {
   return new HotelOnboardingError('not_found', 'The private hotel application was not found.');
-}
-
-function singleSyntheticBureauRouting(route: HotelBureauRoute | null): HotelBureauRoutingPolicy {
-  return {
-    resolveApplicationRoute: async () => (route ? { kind: 'routed', route } : { kind: 'missing' }),
-    routesForReview: async () => (route ? [route] : []),
-  };
-}
-
-function uniqueRoutes(routes: readonly HotelBureauRoute[]): HotelBureauRoute[] {
-  const unique = new Map<string, HotelBureauRoute>();
-  for (const route of routes) {
-    unique.set(`${route.organizationId}\u0000${route.administrativeUnitId}`, route);
-  }
-  return [...unique.values()];
 }

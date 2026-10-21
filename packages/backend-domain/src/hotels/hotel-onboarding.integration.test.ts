@@ -24,6 +24,7 @@ const suite = describe.skipIf(!safeDatabase);
 let client: postgres.Sql;
 let service: HotelOnboardingService;
 let issuer: string;
+let selectedUnitId: string;
 
 beforeAll(async () => {
   if (!safeDatabase || !databaseUrl) return;
@@ -32,17 +33,9 @@ beforeAll(async () => {
     `SELECT to_regclass('public.hotel_applications') IS NOT NULL AS exists`,
   );
   if (!migration?.exists) throw new Error('Disposable database is missing hotel migration 0002.');
-  const route = {
-    organizationId: `hotel-test-bureau-${randomUUID()}`,
-    administrativeUnitId: `hotel-test-unit-${randomUUID()}`,
-  };
   service = new HotelOnboardingService(new PostgresHotelOnboardingStore(client), {
     enabled: true,
     production: false,
-    bureauRouting: {
-      resolveApplicationRoute: async () => ({ kind: 'routed', route }),
-      routesForReview: async () => [route],
-    },
     administratorOrganizationId: `hotel-test-platform-${randomUUID()}`,
   });
 });
@@ -52,6 +45,328 @@ afterAll(async () => {
 });
 
 suite('synthetic hotel onboarding PostgreSQL integration', () => {
+  it('stores draft, submitted content, location and audit JSONB as objects with matching IDs', async () => {
+    const f = await seedFixture();
+    const created = await service.createApplication(f.applicant, { content: content() });
+    const updated = await service.updateDraft(f.applicant, created.id, created.version, content());
+    await service.submitApplication(f.applicant, created.id, updated.version);
+    const [stored] = await client.unsafe(
+      `SELECT
+      jsonb_typeof(a.draft_content) AS draft_type,
+      jsonb_typeof(v.content) AS content_type,
+      jsonb_typeof(v.location_snapshot) AS snapshot_type,
+      v.content->>'administrativeUnitId' AS content_id,
+      v.location_snapshot->>'id' AS snapshot_id,
+      v.location_unit_id, v.scope_unit_id, v.bureau_organization_id
+      FROM hotel_applications a JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id
+      WHERE a.id = $1`,
+      [created.id],
+    );
+    expect(stored).toEqual({
+      draft_type: 'object',
+      content_type: 'object',
+      snapshot_type: 'object',
+      content_id: f.route.administrativeUnitId,
+      snapshot_id: f.route.administrativeUnitId,
+      location_unit_id: f.route.administrativeUnitId,
+      scope_unit_id: f.route.administrativeUnitId,
+      bureau_organization_id: f.route.organizationId,
+    });
+    const audits = await client.unsafe(
+      `SELECT jsonb_typeof(details) AS details_type FROM audit_events
+      WHERE target_resource_id = $1 AND action IN ('hotel.application.created', 'hotel.application.draft_updated', 'hotel.application.submitted')`,
+      [created.id],
+    );
+    expect(audits).toHaveLength(3);
+    expect(audits.every((row) => row.details_type === 'object')).toBe(true);
+  });
+
+  it.each(['submit', 'update-then-submit'])(
+    'reads legacy string drafts and writes object snapshots on %s',
+    async (flow) => {
+      const f = await seedFixture();
+      const draft = content();
+      const created = await service.createApplication(f.applicant, { content: draft });
+      // Explicit JSON string reproduces historical double-encoded private drafts.
+      await client.unsafe(`UPDATE hotel_applications SET draft_content = $2::jsonb WHERE id = $1`, [
+        created.id,
+        client.json(JSON.stringify(draft)),
+      ]);
+      expect((await service.getMyApplication(f.applicant, created.id)).content).toEqual(draft);
+      const ready =
+        flow === 'update-then-submit'
+          ? await service.updateDraft(f.applicant, created.id, created.version, {
+              ...draft,
+              applicantNotes: 'Updated legacy draft',
+            })
+          : created;
+      const submitted = await service.submitApplication(f.applicant, created.id, ready.version);
+      expect(submitted.content.administrativeUnitId).toBe(f.route.administrativeUnitId);
+      const [stored] = await client.unsafe(
+        `SELECT jsonb_typeof(a.draft_content) AS draft_type,
+      jsonb_typeof(v.content) AS content_type, jsonb_typeof(v.location_snapshot) AS snapshot_type
+      FROM hotel_applications a JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id WHERE a.id = $1`,
+        [created.id],
+      );
+      expect(stored).toEqual({
+        draft_type: flow === 'submit' ? 'string' : 'object',
+        content_type: 'object',
+        snapshot_type: 'object',
+      });
+    },
+  );
+
+  it('blocks route insertion phantoms and location disabling until submission commits', async () => {
+    const f = await seedFixture();
+    const created = await service.createApplication(f.applicant, { content: content() });
+    const store = new PostgresHotelOnboardingStore(client);
+    await store.transaction(async (tx) => {
+      await tx.submitApplication(f.applicant, created.id, created.version);
+      for (const statement of [
+        `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
+        `UPDATE hotel_locations SET enabled = false WHERE administrative_unit_id = $1 AND $2::text IS NOT NULL`,
+      ]) {
+        await expect(
+          client.begin(async (sql) => {
+            await sql.unsafe(`SET LOCAL lock_timeout = '150ms'`);
+            await sql.unsafe(statement, [
+              f.route.administrativeUnitId,
+              f.otherBureauOrganizationId,
+            ]);
+          }),
+        ).rejects.toMatchObject({ code: '55P03' });
+      }
+    });
+    expect((await service.getMyApplication(f.applicant, created.id)).status).toBe('submitted');
+  });
+
+  it('isolates office A/B queues, detail and decisions using saved assignments', async () => {
+    const a = await seedFixture();
+    const createdA = await service.createApplication(a.applicant, { content: content() });
+    const submittedA = await service.submitApplication(a.applicant, createdA.id, createdA.version);
+    const caseA = await getCaseId(createdA.id);
+    const b = await seedFixture();
+    const createdB = await service.createApplication(b.applicant, { content: content() });
+    await service.submitApplication(b.applicant, createdB.id, createdB.version);
+    const caseB = await getCaseId(createdB.id);
+    expect((await service.listBureauCases(a.reviewer)).items.map((item) => item.caseId)).toEqual([
+      caseA,
+    ]);
+    expect((await service.listBureauCases(b.reviewer)).items.map((item) => item.caseId)).toEqual([
+      caseB,
+    ]);
+    await expect(service.getBureauCase(a.reviewer, caseB)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    await expect(service.getBureauCase(b.reviewer, caseA)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    await expect(
+      service.decideBureauCase(b.reviewer, caseA, {
+        expectedVersion: submittedA.version,
+        decision: 'approve',
+        reason: 'Wrong office',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect((await service.getBureauCase(a.reviewer, caseA)).location?.id).toBe(
+      a.route.administrativeUnitId,
+    );
+  });
+
+  it.each([
+    'missing-location',
+    'missing-route',
+    'disabled-location',
+    'disabled-route',
+    'ambiguous',
+    'non-synthetic-office',
+    'non-synthetic-location',
+  ])('preserves draft atomically for %s', async (failure) => {
+    const f = await seedFixture();
+    const draft = content();
+    if (failure === 'missing-location')
+      delete (draft as Partial<typeof draft>).administrativeUnitId;
+    if (failure === 'missing-route')
+      await client.unsafe(`DELETE FROM hotel_location_routes WHERE location_unit_id = $1`, [
+        f.route.administrativeUnitId,
+      ]);
+    if (failure === 'disabled-location')
+      await client.unsafe(
+        `UPDATE hotel_locations SET enabled = false WHERE administrative_unit_id = $1`,
+        [f.route.administrativeUnitId],
+      );
+    if (failure === 'disabled-route')
+      await client.unsafe(
+        `UPDATE hotel_location_routes SET enabled = false WHERE location_unit_id = $1`,
+        [f.route.administrativeUnitId],
+      );
+    if (failure === 'ambiguous')
+      await client.unsafe(
+        `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
+        [f.route.administrativeUnitId, f.otherBureauOrganizationId],
+      );
+    if (failure === 'non-synthetic-office')
+      await client.unsafe(`UPDATE organizations SET is_synthetic = false WHERE id = $1`, [
+        f.route.organizationId,
+      ]);
+    if (failure === 'non-synthetic-location')
+      await client.unsafe(`UPDATE administrative_units SET is_synthetic = false WHERE id = $1`, [
+        f.route.administrativeUnitId,
+      ]);
+    const created = await service.createApplication(f.applicant, { content: draft });
+    await expect(
+      service.submitApplication(f.applicant, created.id, created.version),
+    ).rejects.toMatchObject({ code: 'unavailable' });
+    expect(await service.getMyApplication(f.applicant, created.id)).toMatchObject({
+      status: 'draft',
+      version: created.version,
+      content: draft,
+    });
+    const [counts] = await client.unsafe(
+      `SELECT
+      (SELECT count(*)::int FROM hotel_application_versions WHERE application_id = $1) AS versions,
+      (SELECT count(*)::int FROM hotel_bureau_cases WHERE application_id = $1) AS cases,
+      (SELECT count(*)::int FROM audit_events WHERE target_resource_id = $1 AND action = 'hotel.application.submitted') AS audits`,
+      [created.id],
+    );
+    expect(counts).toEqual({ versions: 0, cases: 0, audits: 0 });
+  });
+
+  it('uses arbitrary-depth server ancestors and fails closed on cycles', async () => {
+    const f = await seedFixture();
+    let child = f.route.administrativeUnitId;
+    for (let depth = 0; depth < 14; depth++) {
+      const parent = `hotel-test-ancestor-${randomUUID()}`;
+      await client.unsafe(
+        `INSERT INTO administrative_units (id, display_name, level, is_synthetic) VALUES ($1, 'Synthetic ancestor', 'regional', true)`,
+        [parent],
+      );
+      await client.unsafe(`UPDATE administrative_units SET parent_id = $2 WHERE id = $1`, [
+        child,
+        parent,
+      ]);
+      child = parent;
+    }
+    await client.unsafe(
+      `UPDATE grant_scopes SET administrative_unit_id = $2, include_descendants = true WHERE grant_id IN
+      (SELECT grant_row.id FROM access_grants grant_row JOIN memberships m ON m.id = grant_row.membership_id WHERE m.user_profile_id = $1)`,
+      [await profileId(f.reviewer), child],
+    );
+    const created = await service.createApplication(f.applicant, { content: content() });
+    const submitted = await service.submitApplication(f.applicant, created.id, created.version);
+    expect(submitted.location?.hierarchy).toHaveLength(15);
+    const caseId = await getCaseId(created.id);
+    expect((await service.listBureauCases(f.reviewer)).items.map((item) => item.caseId)).toContain(
+      caseId,
+    );
+    await expect(service.getBureauCase(f.reviewer, caseId)).resolves.toMatchObject({ caseId });
+    await expect(
+      service.decideBureauCase(f.reviewer, caseId, {
+        expectedVersion: submitted.version,
+        decision: 'approve',
+        reason: 'Synthetic descendant review',
+      }),
+    ).resolves.toMatchObject({ status: 'approved' });
+    await client.unsafe(`UPDATE administrative_units SET parent_id = $2 WHERE id = $1`, [
+      child,
+      f.route.administrativeUnitId,
+    ]);
+    expect(
+      (await service.listLocations(f.applicant)).items.some(
+        (item) => item.id === f.route.administrativeUnitId,
+      ),
+    ).toBe(false);
+    const second = await service.createApplication(f.applicant, { content: content() });
+    await expect(
+      service.submitApplication(f.applicant, second.id, second.version),
+    ).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  it('freezes location and assignment across route deactivation and rejects stale detail after a new draft', async () => {
+    const f = await seedFixture();
+    const created = await service.createApplication(f.applicant, { content: content() });
+    const submitted = await service.submitApplication(f.applicant, created.id, created.version);
+    const caseId = await getCaseId(created.id);
+    await client.unsafe(
+      `UPDATE administrative_units SET display_name = 'Renamed synthetic unit' WHERE id = $1`,
+      [f.route.administrativeUnitId],
+    );
+    await client.unsafe(
+      `UPDATE hotel_locations SET enabled = false WHERE administrative_unit_id = $1`,
+      [f.route.administrativeUnitId],
+    );
+    await client.unsafe(
+      `UPDATE hotel_location_routes SET enabled = false WHERE location_unit_id = $1`,
+      [f.route.administrativeUnitId],
+    );
+    expect((await service.getMyApplication(f.applicant, created.id)).location).toEqual(
+      submitted.location,
+    );
+    expect((await service.listBureauCases(f.reviewer)).items.map((item) => item.caseId)).toContain(
+      caseId,
+    );
+    expect((await service.getBureauCase(f.reviewer, caseId)).location).toEqual(submitted.location);
+    const approved = await service.decideBureauCase(f.reviewer, caseId, {
+      expectedVersion: submitted.version,
+      decision: 'approve',
+      reason: 'Saved assignment',
+    });
+    expect(
+      (await service.listAdmissionQueue(f.administrator)).items.map((item) => item.id),
+    ).toContain(created.id);
+    await service.updateDraft(f.applicant, created.id, approved.version, {
+      ...content(),
+      applicantNotes: 'Private newer draft',
+    });
+    await expect(service.getBureauCase(f.reviewer, caseId)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(
+      (await service.listAdmissionQueue(f.administrator)).items.map((item) => item.id),
+    ).not.toContain(created.id);
+  });
+
+  it('keeps location-less legacy versions bound to saved cases and current approvals', async () => {
+    const f = await seedFixture();
+    const legacy = { claimedHotelName: 'Legacy synthetic', applicantNotes: 'Legacy version' };
+    const created = await service.createApplication(f.applicant, { content: legacy });
+    const [version] = await client.unsafe(
+      `INSERT INTO hotel_application_versions
+      (application_id, version_number, content, submitted_by_profile_id) VALUES ($1, 1, $2::jsonb, $3) RETURNING id`,
+      [created.id, JSON.stringify(legacy), f.applicantProfileId],
+    );
+    await client.unsafe(
+      `INSERT INTO hotel_bureau_cases (application_id, application_version_id, bureau_organization_id, scope_unit_id) VALUES ($1, $2, $3, $4)`,
+      [created.id, version!.id, f.route.organizationId, f.route.administrativeUnitId],
+    );
+    await client.unsafe(
+      `UPDATE hotel_applications SET status = 'submitted', current_submitted_version_id = $2, current_version_number = 1 WHERE id = $1`,
+      [created.id, version!.id],
+    );
+    await client.unsafe(`DELETE FROM hotel_location_routes WHERE location_unit_id = $1`, [
+      f.route.administrativeUnitId,
+    ]);
+    const caseId = await getCaseId(created.id);
+    expect(
+      (await service.listBureauCases(f.reviewer)).items.find((item) => item.caseId === caseId)
+        ?.location,
+    ).toBeNull();
+    expect((await service.getBureauCase(f.reviewer, caseId)).location).toBeNull();
+    const approved = await service.decideBureauCase(f.reviewer, caseId, {
+      expectedVersion: created.version,
+      decision: 'approve',
+      reason: 'Legacy saved assignment',
+    });
+    expect(approved.location).toBeNull();
+    await expect(
+      service.decideAdmission(f.administrator, created.id, {
+        expectedVersion: approved.version,
+        decision: 'admit',
+        reason: 'Legacy current approval',
+      }),
+    ).resolves.toMatchObject({ admissionStatus: 'admitted', location: null });
+  });
+
   it('creates private profile-owned drafts without membership or provider grants', async () => {
     const fixture = await seedFixture();
     const response = await service.createApplication(fixture.applicant, { content: content() });
@@ -576,6 +891,14 @@ async function seedFixture(
       [org.id, org.name, org.type, org.level, org.unit],
     );
   }
+  selectedUnitId = route.administrativeUnitId;
+  await client.unsafe(`INSERT INTO hotel_locations (administrative_unit_id) VALUES ($1)`, [
+    selectedUnitId,
+  ]);
+  await client.unsafe(
+    `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
+    [selectedUnitId, route.organizationId],
+  );
   const applicant = await makeActor('applicant');
   const other = await makeActor('other');
   const reviewer = await makeActor('reviewer');
@@ -585,10 +908,6 @@ async function seedFixture(
   const settings = {
     enabled: true,
     production: false,
-    bureauRouting: {
-      resolveApplicationRoute: async () => ({ kind: 'routed' as const, route }),
-      routesForReview: async () => [route],
-    },
     administratorOrganizationId,
   };
   const localService = new HotelOnboardingService(
@@ -689,6 +1008,7 @@ async function getCaseId(applicationId: string): Promise<string> {
 
 function content() {
   return {
+    administrativeUnitId: selectedUnitId,
     claimedHotelName: `Synthetic test lodging ${randomUUID().slice(0, 8)}`,
     applicantNotes: 'Synthetic-only content.',
   };

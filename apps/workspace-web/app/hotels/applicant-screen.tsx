@@ -1,14 +1,18 @@
 'use client';
 
 import {
+  ApiClientError,
   createHotelApplication,
   createHotelApplicationRevision,
   getAdmittedHotelWorkspace,
   getMyHotelApplications,
+  getHotelLocations,
   submitHotelApplication,
 } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import type { HotelLocation } from '@ethio-tour/contracts';
+import { HotelLocationDetails, HotelLocationSelector } from '../components/hotel-location';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../lib/hotel-pilot-session';
 import {
@@ -27,6 +31,26 @@ export function HotelApplicantScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [locations, setLocations] = useState<HotelLocation[]>([]);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [newLocationId, setNewLocationId] = useState('');
+  const loadLocations = useCallback(async () => {
+    if (!accessToken) return;
+    setLocationLoading(true);
+    setLocationError(null);
+    try {
+      setLocations((await getHotelLocations({ accessToken })).items);
+    } catch (requestError) {
+      setLocationError(describeApiFailure(requestError, 'loading locations'));
+    } finally {
+      setLocationLoading(false);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    void loadLocations();
+  }, [loadLocations]);
 
   const reload = useCallback(async () => {
     if (!accessToken) return;
@@ -54,6 +78,7 @@ export function HotelApplicantScreen() {
     const content = {
       claimedHotelName: String(form.get('claimedHotelName') ?? '').trim(),
       applicantNotes: String(form.get('applicantNotes') ?? '').trim(),
+      ...(newLocationId ? { administrativeUnitId: newLocationId } : {}),
     };
     if (!content.claimedHotelName) {
       setError('Enter the hotel name you are applying about.');
@@ -68,6 +93,7 @@ export function HotelApplicantScreen() {
       setApplications((current) => [created, ...current]);
       setNotice('The private draft was returned by the API. Review it below before submitting.');
       formElement.reset();
+      setNewLocationId('');
     } catch (requestError) {
       setError(describeApiFailure(requestError, 'creating the private application'));
     } finally {
@@ -88,7 +114,11 @@ export function HotelApplicantScreen() {
       setApplications((current) => replaceApplication(current, updated));
       setNotice('The API accepted the submission. Its status below reflects the API response.');
     } catch (requestError) {
-      setError(describeApiFailure(requestError, 'submitting this version'));
+      setError(
+        requestError instanceof ApiClientError && requestError.status === 503
+          ? 'Review routing is currently unavailable. Your private draft was not submitted. Retry later or save a different location.'
+          : describeApiFailure(requestError, 'submitting this version'),
+      );
     }
   }
 
@@ -137,6 +167,15 @@ export function HotelApplicantScreen() {
                 <label htmlFor="applicant-notes">Application notes</label>
                 <textarea id="applicant-notes" name="applicantNotes" />
               </div>
+              <HotelLocationSelector
+                id="new-hotel-location"
+                locations={locations}
+                value={newLocationId}
+                onChange={setNewLocationId}
+                loading={locationLoading}
+                error={locationError}
+                onRetry={() => void loadLocations()}
+              />
               <button type="submit" disabled={creating}>
                 {creating ? 'Creating draft…' : 'Create private draft'}
               </button>
@@ -178,6 +217,10 @@ export function HotelApplicantScreen() {
                   key={`${application.id}-${application.currentVersionId}`}
                   application={application}
                   accessToken={accessToken}
+                  locations={locations}
+                  locationLoading={locationLoading}
+                  locationError={locationError}
+                  onRetryLocations={() => void loadLocations()}
                   onSubmit={() => submitDraft(application)}
                   onCreateCorrection={(content) => createCorrection(application, content)}
                 />
@@ -195,12 +238,21 @@ function ApplicantApplicationCard({
   accessToken,
   onSubmit,
   onCreateCorrection,
+  locations,
+  locationLoading,
+  locationError,
+  onRetryLocations,
 }: Readonly<{
   application: HotelApplicationResponse;
   accessToken: string;
   onSubmit: () => Promise<void>;
   onCreateCorrection: (content: HotelApplicationContent) => Promise<void>;
+  locations: HotelLocation[];
+  locationLoading: boolean;
+  locationError: string | null;
+  onRetryLocations: () => void;
 }>) {
+  const [locationId, setLocationId] = useState(application.content.administrativeUnitId ?? '');
   const [busy, setBusy] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
@@ -217,6 +269,7 @@ function ApplicantApplicationCard({
       await onCreateCorrection({
         claimedHotelName,
         applicantNotes: String(form.get('applicantNotes') ?? '').trim(),
+        ...(locationId ? { administrativeUnitId: locationId } : {}),
       });
     } finally {
       setBusy(false);
@@ -254,6 +307,10 @@ function ApplicantApplicationCard({
         <span className="status status-neutral">{application.status.replaceAll('_', ' ')}</span>
       </div>
       {application.content.applicantNotes && <p>{application.content.applicantNotes}</p>}
+      <HotelLocationDetails
+        location={application.location}
+        submitted={application.status !== 'draft' && application.currentVersionId != null}
+      />
       <p className="muted">
         Administrator admission: {application.admissionStatus.replaceAll('_', ' ')}
       </p>
@@ -263,7 +320,10 @@ function ApplicantApplicationCard({
           <p className="notice">
             Private workspace access only. No listing, booking, subscription, or payment is enabled.
           </p>
-          <div className="action-row" style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div
+            className="action-row"
+            style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}
+          >
             <button
               type="button"
               className="secondary-button"
@@ -274,8 +334,8 @@ function ApplicantApplicationCard({
               {workspaceLoading
                 ? 'Loading admitted workspace…'
                 : workspaceOpen
-                ? 'Hide admitted workspace'
-                : 'View admitted workspace'}
+                  ? 'Hide admitted workspace'
+                  : 'View admitted workspace'}
             </button>
             <Link
               href={`/hotels/workspace/${application.id}`}
@@ -297,6 +357,12 @@ function ApplicantApplicationCard({
               aria-label="Admitted hotel workspace details"
             >
               <h4>Confirmed Admitted Workspace</h4>
+              <HotelLocationDetails
+                location={admittedWorkspace.location}
+                submitted={
+                  admittedWorkspace.status !== 'draft' && admittedWorkspace.currentVersionId != null
+                }
+              />
               <p>
                 <strong>Claimed hotel:</strong> {admittedWorkspace.content.claimedHotelName}
               </p>
@@ -304,12 +370,14 @@ function ApplicantApplicationCard({
                 <strong>Admitted version:</strong> {admittedWorkspace.currentVersion}
               </p>
               <p className="muted">
-                <strong>Workspace tier:</strong> {admittedWorkspace.workspaceAccess.replaceAll('_', ' ')} ·{' '}
+                <strong>Workspace tier:</strong>{' '}
+                {admittedWorkspace.workspaceAccess.replaceAll('_', ' ')} ·{' '}
                 <strong>Admission:</strong> {admittedWorkspace.admissionStatus.replaceAll('_', ' ')}
               </p>
               {admittedWorkspace.admissionDecision && (
                 <p>
-                  <strong>Administrator reason:</strong> {admittedWorkspace.admissionDecision.reason}
+                  <strong>Administrator reason:</strong>{' '}
+                  {admittedWorkspace.admissionDecision.reason}
                 </p>
               )}
               {admittedWorkspace.bureauDecision && (
@@ -366,6 +434,15 @@ function ApplicantApplicationCard({
               defaultValue={application.content.applicantNotes}
             />
           </div>
+          <HotelLocationSelector
+            id={`hotel-location-${application.id}`}
+            locations={locations}
+            value={locationId}
+            onChange={setLocationId}
+            loading={locationLoading}
+            error={locationError}
+            onRetry={onRetryLocations}
+          />
           <button type="submit" disabled={busy}>
             {busy ? 'Saving draft…' : 'Save private draft'}
           </button>
@@ -375,7 +452,11 @@ function ApplicantApplicationCard({
         <div className="action-row decision-details">
           <button
             type="button"
-            disabled={busy}
+            disabled={
+              busy ||
+              !application.content.administrativeUnitId ||
+              locationId !== application.content.administrativeUnitId
+            }
             onClick={async () => {
               setBusy(true);
               try {
