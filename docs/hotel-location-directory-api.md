@@ -17,11 +17,18 @@ Parameters:
   preferred label ordering, not geographic filtering.
 - `limit`: optional integer from 1 through 50; default 20.
 - `cursor`: optional opaque continuation cursor bound to the active release and
-  normalized query/language. Cursors are not client-editable offsets.
+  normalized query/language and keyset tuple. It is not an authorization token;
+  malformed or mismatched cursors return `400 INVALID_QUERY`.
 
-Results are deterministically ordered by normalized selected label, unit ID,
-then unit-revision ID. Each result includes a full root-to-selected hierarchy,
-so duplicate names and variable-depth paths remain distinguishable.
+Search normalization is Unicode NFKC, trim, then lowercase. Query text matches
+within a stored display name or alias; wildcard characters are treated
+literally. If `language` is supplied, label choice prefers that exact tag, then
+the same base language, then English, then the lexicographically smallest
+language tag/script/name. Matching names collapse to one result per unit; the
+chosen matching value is returned as `matchedName`. Results are deterministically
+ordered by the normalized selected display label, unit ID, then unit-revision
+ID. Each result includes a full root-to-selected hierarchy, so duplicate names
+and variable-depth paths remain distinguishable.
 
 ```json
 {
@@ -75,7 +82,12 @@ pair in the submission transaction. The client cannot provide route, Bureau,
 organization, scope, release activation, synthetic status, or permission fields.
 The submission snapshot records the selected revision and complete hierarchy.
 The applicant sees “Applicant-declared location — unverified.” Bureau assignment
-is not returned in applicant responses.
+is not returned in applicant responses. Application responses return `location`
+and `locationState`: `current` or `stale` for an unsubmitted draft selection,
+`submitted_snapshot` for a release-bound submitted version, `legacy` for a
+pre-directory snapshot, or `unselected` when no location is selected. Historical
+legacy locations are displayed from their saved snapshot only; no current
+hierarchy is inferred for authorization.
 
 ## Errors and stale state
 

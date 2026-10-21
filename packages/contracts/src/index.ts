@@ -245,7 +245,8 @@ export interface HotelApplicationResponse {
   /** Version with an Administrator admission decision; does not imply the current version is approved. */
   admittedVersion: number | null;
   content: HotelApplicationContent;
-  location: HotelLocation | null;
+  location: HotelSubmittedLocation | HotelLocation | null;
+  locationState: 'unselected' | 'current' | 'stale' | 'legacy' | 'submitted_snapshot';
   bureauDecision: HotelBureauDecisionSummary | null;
   admissionDecision: HotelAdmissionDecisionSummary | null;
   /** Earlier decisions, returned only to the profile that owns the application. */
@@ -263,8 +264,8 @@ export interface HotelApplicationListResponse {
 export interface HotelBureauCaseResponse extends HotelApplicationResponse {
   caseId: string;
   caseStatus: HotelBureauCaseStatus;
-  submittedLocation: HotelSubmittedLocation | null;
-  assignment: HotelBureauAssignmentSummary;
+  submittedLocation: HotelSubmittedLocation | HotelLocation | null;
+  assignment: HotelBureauAssignmentSummary | null;
 }
 
 export interface HotelBureauCaseListResponse {
