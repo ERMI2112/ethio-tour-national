@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       'src/hotels/hotel-onboarding.integration.test.ts',
       'src/hotels/hotel-location-directory.integration.test.ts',
+      'src/hotels/hotel-directory-upgrade.integration.test.ts',
     ],
     reporters: ['verbose'],
   },

@@ -53,3 +53,50 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  hotel-postgis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Enable pinned pnpm
+        run: corepack enable && corepack prepare pnpm@12.5.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: Build backend packages
+        run: pnpm --filter @ethio-tour/backend-domain... build
+      - name: Provision task-owned disposable PostGIS
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$task_password"
+          task_container="et-hotel-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d --name "$task_container" --label ethiotour.disposable=true \
+            --tmpfs /var/lib/postgresql/data:rw -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=hotel_test -e POSTGRES_DB=ethio_tour_hotel_test_ci \
+            -e POSTGRES_PASSWORD="$task_password" postgis/postgis:16-3.5
+          echo "HOTEL_TEST_CONTAINER=$task_container" >> "$GITHUB_ENV"
+          echo "HOTEL_PILOT_TEST_DATABASE_URL=postgresql://hotel_test:$task_password@127.0.0.1:55432/ethio_tour_hotel_test_ci" >> "$GITHUB_ENV"
+          echo "HOTEL_PILOT_TEST_DISPOSABLE=true" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            if docker exec "$task_container" pg_isready -U hotel_test -d ethio_tour_hotel_test_ci; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Apply fresh migrations
+        run: pnpm db:migrate:hotel-test
+      - name: Required hotel PostgreSQL suites
+        run: pnpm --filter @ethio-tour/backend-domain exec vitest run --config vitest.hotel-integration.config.ts --reporter=json --outputFile=/tmp/hotel-postgis-report.json
+      - name: Require all suites and zero skips
+        run: node scripts/assert-hotel-tests-executed.cjs /tmp/hotel-postgis-report.json
+      - name: Remove only task-owned PostGIS
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${HOTEL_TEST_CONTAINER:-}" ] && [ "$(docker inspect -f '{{ index .Config.Labels "ethiotour.disposable" }}' "$HOTEL_TEST_CONTAINER")" = true ]; then
+            docker rm -f "$HOTEL_TEST_CONTAINER"
+          fi
