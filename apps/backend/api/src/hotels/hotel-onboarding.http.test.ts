@@ -18,11 +18,26 @@ const hotels = {
   updateDraft: vi.fn(async (_actor, _id, _version, content) => ({ content })),
   submitApplication: vi.fn(async () => ({})),
   decideBureauCase: vi.fn(async () => {
-    throw new HotelOnboardingError('forbidden', 'missing-scope');
+    throw new HotelOnboardingError('not_found', 'The private hotel application was not found.');
   }),
   decideAdmission: vi.fn(async () => ({})),
   listLocations: vi.fn(async () => ({
-    items: [{ id: 'location', label: 'Synthetic location', parentId: null, hierarchy: [] }],
+    directoryRelease: {
+      id: 'synthetic-release',
+      sourceEdition: 'test',
+      effectiveFrom: null,
+      synthetic: true,
+    },
+    items: [
+      {
+        unitId: 'location',
+        unitRevisionId: '00000000-0000-4000-8000-000000000004',
+        unitType: 'demo',
+        displayName: 'Synthetic location',
+        hierarchy: [],
+      },
+    ],
+    nextCursor: null,
   })),
   getBureauCase: vi.fn(async () => {
     throw new HotelOnboardingError('not_found', 'The private hotel application was not found.');
@@ -49,7 +64,11 @@ const id = '3e1d52cc-83f1-4ce0-8fcb-59a488b83571';
 const content = {
   claimedHotelName: 'Synthetic HTTP hotel',
   applicantNotes: '',
-  administrativeUnitId: 'location',
+  locationSelection: {
+    geographyReleaseId: 'synthetic-release',
+    unitId: 'location',
+    unitRevisionId: '00000000-0000-4000-8000-000000000004',
+  },
 };
 
 beforeAll(async () => {
@@ -100,7 +119,7 @@ describe('hotel HTTP boundary with the actual global whitelist pipe', () => {
       headers: { authorization: 'Bearer synthetic-test' },
     });
     expect(result.status).toBe(200);
-    expect(await result.json()).toMatchObject({ items: [{ id: 'location' }] });
+    expect(await result.json()).toMatchObject({ items: [{ unitId: 'location' }] });
   });
   it('preserves selected location through the global pipe and validates malformed content', async () => {
     const result = await post('hotels/applications', { content });
@@ -135,6 +154,21 @@ describe('hotel HTTP boundary with the actual global whitelist pipe', () => {
       (await post('hotels/applications', { content: { ...content, [key]: 'forged' } })).status,
     ).toBe(400);
   });
+  it.each(['organizationId', 'scopeUnitId', 'routingReleaseId', 'routingRuleId', 'isSynthetic'])(
+    'rejects forged authority in the selected location: %s',
+    async (key) => {
+      expect(
+        (
+          await post('hotels/applications', {
+            content: {
+              ...content,
+              locationSelection: { ...content.locationSelection, [key]: 'forged' },
+            },
+          })
+        ).status,
+      ).toBe(400);
+    },
+  );
   it.each([
     `hotels/applications/${id}/revisions`,
     `hotels/applications/${id}/submit`,
@@ -145,7 +179,7 @@ describe('hotel HTTP boundary with the actual global whitelist pipe', () => {
       400,
     );
   });
-  it('returns identical 404 details for unknown and inaccessible case IDs, and 403 for a denied known decision', async () => {
+  it('returns identical non-enumerating 404s for unknown and inaccessible case reads and decisions', async () => {
     const headers = { authorization: 'Bearer synthetic-test' };
     const known = await fetch(`${base}/api/bureau/hotel-cases/${id}`, { headers });
     const unknown = await fetch(
@@ -155,14 +189,21 @@ describe('hotel HTTP boundary with the actual global whitelist pipe', () => {
     expect(known.status).toBe(404);
     expect(unknown.status).toBe(404);
     expect(await known.json()).toEqual(await unknown.json());
-    expect(
-      (
-        await post(`bureau/hotel-cases/${id}/decision`, {
-          expectedVersion: 1,
-          decision: 'approve',
-          reason: 'Synthetic',
-        })
-      ).status,
-    ).toBe(403);
+    const denied = await post(`bureau/hotel-cases/${id}/decision`, {
+      expectedVersion: 1,
+      decision: 'approve',
+      reason: 'Synthetic',
+    });
+    const nonexistent = await post(
+      'bureau/hotel-cases/62363e1a-c716-4454-9bc9-c6c336c9a17e/decision',
+      {
+        expectedVersion: 1,
+        decision: 'approve',
+        reason: 'Synthetic',
+      },
+    );
+    expect(denied.status).toBe(404);
+    expect(nonexistent.status).toBe(404);
+    expect(await denied.json()).toEqual(await nonexistent.json());
   });
 });

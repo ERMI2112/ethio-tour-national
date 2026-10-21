@@ -201,7 +201,8 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
         reason: 'Wrong office',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect((await service.getBureauCase(a.reviewer, caseA)).location?.id).toBe(
+    const caseLocation = (await service.getBureauCase(a.reviewer, caseA)).location;
+    expect(caseLocation && 'unitId' in caseLocation ? caseLocation.unitId : null).toBe(
       a.route.administrativeUnitId,
     );
   });
@@ -306,7 +307,7 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     ]);
     expect(
       (await service.listLocations(f.applicant)).items.some(
-        (item) => item.id === f.route.administrativeUnitId,
+        (item) => item.unitId === f.route.administrativeUnitId,
       ),
     ).toBe(false);
     const second = await service.createApplication(f.applicant, { content: content() });

@@ -3,6 +3,8 @@ import type { Capability } from '@ethio-tour/authz';
 import type {
   DecideHotelAdmissionRequest,
   DecideHotelApplicationRequest,
+  HotelLocationSearchQuery,
+  HotelLocationErrorCode,
   HotelApplicationContent,
 } from '@ethio-tour/contracts';
 
@@ -23,6 +25,7 @@ export class HotelOnboardingError extends Error {
       | 'invalid'
       | 'unavailable',
     public readonly reason: string,
+    public readonly errorCode?: HotelLocationErrorCode,
   ) {
     super(reason);
     this.name = 'HotelOnboardingError';
@@ -50,11 +53,10 @@ export class HotelOnboardingService {
     private readonly settings: HotelPilotSettings = hotelPilotSettings(),
   ) {}
 
-  async listLocations(actor: RegistryActor) {
+  async listLocations(actor: RegistryActor, query: HotelLocationSearchQuery = {}) {
     this.requireEnabled();
-    return this.mutate(actor, 'hotel.locations.read', null, async (tx) => ({
-      items: await tx.listLocations(),
-    }));
+    const validated = validateLocationSearchQuery(query);
+    return this.mutate(actor, 'hotel.locations.read', null, (tx) => tx.listLocations(validated));
   }
 
   async getBureauCase(actor: RegistryActor, caseId: string) {
@@ -69,7 +71,7 @@ export class HotelOnboardingService {
   async createApplication(actor: RegistryActor, input: { content: HotelApplicationContent }) {
     this.requireEnabled();
     return this.mutate(actor, 'hotel.application.create', null, async (tx) => {
-      const content = validateContent(input.content);
+      const content = validateContent(input.content, false);
       return tx.createApplication(actor, content);
     });
   }
@@ -100,7 +102,7 @@ export class HotelOnboardingService {
         actor,
         applicationId,
         expectedVersion,
-        validateContent(content),
+        validateContent(content, true),
       );
       if (!result) throw notFound();
       return result;
@@ -137,21 +139,41 @@ export class HotelOnboardingService {
     const reason = validateReason(request.reason);
     return this.mutate(actor, 'hotel.application.bureau.decide', caseId, async (tx) => {
       const target = await tx.getBureauDecisionTarget(caseId);
-      if (!target?.organizationId || !target.administrativeUnitId) throw notFound();
+      if (
+        !target?.organizationId ||
+        (!target.administrativeUnitId && !(target.geographyReleaseId && target.geographyUnitId))
+      )
+        throw notFound();
       const route = {
         organizationId: target.organizationId,
-        administrativeUnitId: target.administrativeUnitId,
+        ...(target.administrativeUnitId
+          ? { administrativeUnitId: target.administrativeUnitId }
+          : {}),
+        ...(target.geographyReleaseId ? { geographyReleaseId: target.geographyReleaseId } : {}),
+        ...(target.geographyUnitId ? { geographyUnitId: target.geographyUnitId } : {}),
+        ...(target.routingReleaseId ? { routingReleaseId: target.routingReleaseId } : {}),
+        ...(target.routingRuleId ? { routingRuleId: target.routingRuleId } : {}),
       };
       const authorization = authorize(await tx.getAuthorizationContext(actor), {
         capability: 'hotel:application:bureau:decide',
         organizationId: route.organizationId,
-        administrativeUnitId: route.administrativeUnitId,
-        administrativeUnitAncestorIds: await tx.getAdministrativeUnitAncestorIds(
-          route.administrativeUnitId,
-        ),
+        ...(route.administrativeUnitId
+          ? {
+              administrativeUnitId: route.administrativeUnitId,
+              // Legacy assignments receive exact-unit authorization only; current ancestry is not historical evidence.
+              administrativeUnitAncestorIds: [],
+            }
+          : {
+              hotelGeographyReleaseId: route.geographyReleaseId!,
+              hotelGeographyUnitId: route.geographyUnitId!,
+              hotelGeographyAncestorUnitIds: await tx.getHotelGeographyAncestorUnitIds(
+                route.geographyReleaseId!,
+                route.geographyUnitId!,
+              ),
+            }),
         resourceIsSynthetic: target.resourceIsSynthetic,
       });
-      if (!authorization.allowed) throw forbidden(authorization.reason);
+      if (!authorization.allowed) throw notFound();
 
       const result = await tx.decideBureauCase(
         actor,
@@ -248,7 +270,11 @@ export class HotelOnboardingService {
         return operation(tx);
       });
     } catch (error) {
-      if (error instanceof HotelOnboardingError && ['forbidden', 'conflict'].includes(error.code)) {
+      if (
+        error instanceof HotelOnboardingError &&
+        (['forbidden', 'conflict'].includes(error.code) ||
+          (error.code === 'not_found' && action.startsWith('hotel.application.bureau.')))
+      ) {
         await this.store.transaction((tx) =>
           tx.appendDenial(actor, action, targetId, error.reason),
         );
@@ -264,6 +290,8 @@ export class HotelOnboardingService {
       capability: Capability;
       organizationId: string;
       administrativeUnitId?: string;
+      hotelGeographyReleaseId?: string;
+      hotelGeographyUnitId?: string;
       resourceIsSynthetic: true;
     },
     operation: (tx: HotelOnboardingTransaction) => Promise<T>,
@@ -296,7 +324,10 @@ export class HotelOnboardingService {
   }
 }
 
-function validateContent(content: HotelApplicationContent): HotelApplicationContent {
+function validateContent(
+  content: HotelApplicationContent,
+  allowLegacySelection: boolean,
+): HotelApplicationContent {
   if (!content || typeof content !== 'object') throw invalid('Application content is required.');
   const claimedHotelName = content.claimedHotelName?.trim();
   const applicantNotes = content.applicantNotes?.trim();
@@ -305,13 +336,88 @@ function validateContent(content: HotelApplicationContent): HotelApplicationCont
   if (typeof applicantNotes !== 'string' || applicantNotes.length > 2000)
     throw invalid('Applicant notes must be at most 2000 characters.');
   const unitId = content.administrativeUnitId;
-  if (unitId !== undefined && (typeof unitId !== 'string' || !unitId.trim() || unitId.length > 200))
-    throw invalid('Enter a valid administrative unit ID.');
+  if (
+    unitId !== undefined &&
+    (!allowLegacySelection || typeof unitId !== 'string' || !unitId.trim() || unitId.length > 200)
+  ) {
+    throw invalid('Choose a location from the active directory release.');
+  }
+  const selection = content.locationSelection;
+  if (selection !== undefined) {
+    if (
+      !selection ||
+      typeof selection !== 'object' ||
+      typeof selection.geographyReleaseId !== 'string' ||
+      !selection.geographyReleaseId.trim() ||
+      selection.geographyReleaseId.length > 100 ||
+      typeof selection.unitId !== 'string' ||
+      !selection.unitId.trim() ||
+      selection.unitId.length > 200 ||
+      typeof selection.unitRevisionId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        selection.unitRevisionId,
+      )
+    ) {
+      throw invalid('Choose a valid location from the active directory release.');
+    }
+    if (unitId !== undefined) throw invalid('Choose one location selection.');
+  }
   return {
     claimedHotelName,
     applicantNotes,
     ...(unitId === undefined ? {} : { administrativeUnitId: unitId.trim() }),
+    ...(selection === undefined
+      ? {}
+      : {
+          locationSelection: {
+            geographyReleaseId: selection.geographyReleaseId.trim(),
+            unitId: selection.unitId.trim(),
+            unitRevisionId: selection.unitRevisionId.trim(),
+          },
+        }),
   };
+}
+
+function validateLocationSearchQuery(query: HotelLocationSearchQuery): HotelLocationSearchQuery {
+  if (query.query !== undefined && typeof query.query !== 'string') throw invalidQuery();
+  const value = query.query?.normalize('NFKC').trim();
+  if (value !== undefined && Array.from(value).length > 100) {
+    throw invalidQuery();
+  }
+  if (query.language !== undefined) {
+    if (typeof query.language !== 'string' || query.language.length > 35) throw invalidQuery();
+    try {
+      if (Intl.getCanonicalLocales(query.language).length !== 1) throw new Error();
+    } catch {
+      throw invalidQuery();
+    }
+  }
+  const limit = query.limit ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw invalidQuery();
+  }
+  if (
+    query.cursor !== undefined &&
+    (typeof query.cursor !== 'string' || query.cursor.length > 2048 || !query.cursor.trim())
+  ) {
+    throw invalidQuery();
+  }
+  return {
+    ...(value === undefined ? {} : { query: value }),
+    ...(query.language === undefined
+      ? {}
+      : { language: Intl.getCanonicalLocales(query.language)[0] }),
+    limit,
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+  };
+}
+
+function invalidQuery(): HotelOnboardingError {
+  return new HotelOnboardingError(
+    'invalid',
+    'The location search query is invalid.',
+    'INVALID_QUERY',
+  );
 }
 
 function validateReason(reason: string): string {

@@ -5,13 +5,21 @@ import {
   HotelOnboardingService,
   hotelPilotSettings,
 } from './hotel-onboarding-service';
-import type { HotelOnboardingStore, HotelOnboardingTransaction } from './hotel-onboarding-store';
+import type {
+  HotelDecisionTarget,
+  HotelOnboardingStore,
+  HotelOnboardingTransaction,
+} from './hotel-onboarding-store';
 
 const actor = { issuer: 'https://identity.example.test', subjectId: 'synthetic-applicant' };
 const content = {
   claimedHotelName: 'Synthetic hotel',
   applicantNotes: 'Pilot only.',
-  administrativeUnitId: 'child',
+  locationSelection: {
+    geographyReleaseId: 'geography-a',
+    unitId: 'child',
+    unitRevisionId: '00000000-0000-4000-8000-000000000004',
+  },
 };
 const settings = { enabled: true, production: false, administratorOrganizationId: 'platform' };
 function fixture(
@@ -28,7 +36,7 @@ function fixture(
             membershipId: 'member',
             organizationId: 'office-a',
             capability,
-            scopes: [{ administrativeUnitId: 'root', includeDescendants: true }],
+            scopes: [{ administrativeUnitId: 'child', includeDescendants: false }],
             active: true,
             demoOnly: true,
             productionDecisionEnabled: false,
@@ -39,17 +47,20 @@ function fixture(
   const tx = {
     getAuthorizationContext: vi.fn(async () => context),
     getAdministrativeUnitAncestorIds: vi.fn(async () => ['root', 'parent']),
+    getHotelGeographyAncestorUnitIds: vi.fn(async () => ['root']),
     createApplication: vi.fn(async () => ({ content, status: 'draft', location: null })),
     submitApplication: vi.fn(async () => ({ content })),
     updateDraft: vi.fn(async () => ({ content })),
     listLocations: vi.fn(async () => []),
     listBureauCases: vi.fn(async () => []),
     getBureauCase: vi.fn(async () => null),
-    getBureauDecisionTarget: vi.fn(async () => ({
-      organizationId: 'office-a',
-      administrativeUnitId: 'child',
-      resourceIsSynthetic: true,
-    })),
+    getBureauDecisionTarget: vi.fn(
+      async (): Promise<HotelDecisionTarget | null> => ({
+        organizationId: 'office-a',
+        administrativeUnitId: 'child',
+        resourceIsSynthetic: true,
+      }),
+    ),
     decideBureauCase: vi.fn(async () => ({ content })),
     listAdmissionQueue: vi.fn(async () => []),
     getAdmissionDecisionTarget: vi.fn(async () => ({ resourceIsSynthetic: true })),
@@ -76,6 +87,19 @@ describe('synthetic multi-office hotel service', () => {
     const legacy = { claimedHotelName: content.claimedHotelName, applicantNotes: '' };
     await service.createApplication(actor, { content: legacy });
     expect(tx.createApplication).toHaveBeenCalledWith(actor, legacy);
+  });
+  it('does not allow a new applicant draft to select a legacy mutable administrative unit', async () => {
+    const { service, tx } = fixture();
+    await expect(
+      service.createApplication(actor, {
+        content: {
+          claimedHotelName: content.claimedHotelName,
+          applicantNotes: '',
+          administrativeUnitId: 'legacy-unit',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    expect(tx.createApplication).not.toHaveBeenCalled();
   });
   it.each([null, '', 12])(
     'rejects malformed selected location %s',
@@ -120,15 +144,55 @@ describe('synthetic multi-office hotel service', () => {
       code: 'not_found',
     });
   });
-  it('authorizes descendants with server-fetched ancestors', async () => {
+  it('authorizes legacy cases only against their exact saved scope, not current ancestry', async () => {
     const { service, tx } = fixture('hotel:application:bureau:decide');
     await service.decideBureauCase(actor, 'case', {
       expectedVersion: 2,
       decision: 'approve',
       reason: 'Synthetic review',
     });
-    expect(tx.getAdministrativeUnitAncestorIds).toHaveBeenCalledWith('child');
+    expect(tx.getAdministrativeUnitAncestorIds).not.toHaveBeenCalled();
     expect(tx.decideBureauCase).toHaveBeenCalled();
+  });
+  it('authorizes new cases with ancestors from their immutable geography release', async () => {
+    const { service, tx, context } = fixture('hotel:application:bureau:decide');
+    context.grants[0]!.scopes = [
+      {
+        hotelGeographyReleaseId: 'geography-a',
+        hotelGeographyUnitId: 'root-a',
+        includeDescendants: true,
+      },
+    ];
+    tx.getBureauDecisionTarget.mockResolvedValueOnce({
+      organizationId: 'office-a',
+      administrativeUnitId: null,
+      geographyReleaseId: 'geography-a',
+      geographyUnitId: 'scope-a',
+      routingReleaseId: 'routing-a',
+      routingRuleId: 'rule-a',
+      resourceIsSynthetic: true,
+    } as HotelDecisionTarget);
+    tx.getHotelGeographyAncestorUnitIds.mockResolvedValueOnce(['root-a']);
+
+    await service.decideBureauCase(actor, 'case', {
+      expectedVersion: 2,
+      decision: 'approve',
+      reason: 'Synthetic review',
+    });
+
+    expect(tx.getHotelGeographyAncestorUnitIds).toHaveBeenCalledWith('geography-a', 'scope-a');
+    expect(tx.decideBureauCase).toHaveBeenCalledWith(
+      actor,
+      'case',
+      2,
+      'approve',
+      'Synthetic review',
+      expect.objectContaining({
+        geographyReleaseId: 'geography-a',
+        routingReleaseId: 'routing-a',
+        routingRuleId: 'rule-a',
+      }),
+    );
   });
   it('does not combine scope and capability from different grants', async () => {
     const { service, tx, context } = fixture('hotel:application:bureau:decide');
@@ -143,7 +207,7 @@ describe('synthetic multi-office hotel service', () => {
         decision: 'approve',
         reason: 'Synthetic review',
       }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
+    ).rejects.toMatchObject({ code: 'not_found' });
     expect(tx.decideBureauCase).not.toHaveBeenCalled();
   });
   it('protects directory authentication', async () => {

@@ -36,9 +36,10 @@
     "db:migrate": "tsx src/migrate-cli.ts",
     "db:migrate:disposable": "tsx src/migrate-disposable-cli.ts",
     "db:seed:demo": "tsx src/demo-seed-cli.ts",
+    "db:provision:hotel-directory:test": "tsx src/hotel-directory-provision-cli.ts",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:hotel:migration": "vitest run src/hotel-migration.test.ts src/hotel-multi-office-migration.test.ts src/disposable-database-target.test.ts"
+    "test:hotel:migration": "vitest run src/hotel-migration.test.ts src/hotel-multi-office-migration.test.ts src/hotel-case-assignment-migration.test.ts src/hotel-versioned-directory-migration.test.ts src/disposable-database-target.test.ts"
   }
 }

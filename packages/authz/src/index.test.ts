@@ -215,4 +215,80 @@ describe('synthetic hotel authorization', () => {
 
     expect(decision).toEqual({ allowed: false, reason: 'production-decision-disabled' });
   });
+
+  it('uses ancestry from the case geography release and rejects a scope from another release', () => {
+    const currentRelease = authorize(
+      context([
+        grant('hotel:application:bureau:decide', {
+          scopes: [
+            {
+              hotelGeographyReleaseId: 'geography-a',
+              hotelGeographyUnitId: 'office-area-a',
+              includeDescendants: true,
+            },
+          ],
+        }),
+      ]),
+      {
+        capability: 'hotel:application:bureau:decide',
+        organizationId: 'org-gondar',
+        hotelGeographyReleaseId: 'geography-a',
+        hotelGeographyUnitId: 'location-gondar',
+        hotelGeographyAncestorUnitIds: ['office-area-a', 'root-a'],
+        resourceIsSynthetic: true,
+      },
+    );
+    expect(currentRelease.allowed).toBe(true);
+
+    const wrongRelease = authorize(
+      context([
+        grant('hotel:application:bureau:decide', {
+          scopes: [
+            {
+              hotelGeographyReleaseId: 'geography-a',
+              hotelGeographyUnitId: 'office-area-a',
+              includeDescendants: true,
+            },
+          ],
+        }),
+      ]),
+      {
+        capability: 'hotel:application:bureau:decide',
+        organizationId: 'org-gondar',
+        hotelGeographyReleaseId: 'geography-b',
+        hotelGeographyUnitId: 'location-gondar',
+        hotelGeographyAncestorUnitIds: ['office-area-a', 'root-a'],
+        resourceIsSynthetic: true,
+      },
+    );
+    expect(wrongRelease).toEqual({ allowed: false, reason: 'missing-scope' });
+  });
+
+  it('does not combine a hotel capability and geography scope across grants', () => {
+    const decision = authorize(
+      context([
+        grant('hotel:application:bureau:decide', {
+          scopes: [{ administrativeUnitId: 'legacy-unit', includeDescendants: false }],
+        }),
+        grant('hotel:application:bureau:read', {
+          id: 'other-grant',
+          scopes: [
+            {
+              hotelGeographyReleaseId: 'geography-a',
+              hotelGeographyUnitId: 'location-gondar',
+              includeDescendants: false,
+            },
+          ],
+        }),
+      ]),
+      {
+        capability: 'hotel:application:bureau:decide',
+        organizationId: 'org-gondar',
+        hotelGeographyReleaseId: 'geography-a',
+        hotelGeographyUnitId: 'location-gondar',
+        resourceIsSynthetic: true,
+      },
+    );
+    expect(decision).toEqual({ allowed: false, reason: 'missing-scope' });
+  });
 });

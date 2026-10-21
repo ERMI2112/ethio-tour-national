@@ -32,7 +32,7 @@ describe('hotel Bureau case assignment migration', () => {
   it('adds the migration after 0003 without changing the represented schema or prior history', () => {
     expect(snapshot.prevId).toBe(previousSnapshot.id);
     expect(snapshot.tables).toEqual(previousSnapshot.tables);
-    expect(journal.entries.at(-1)).toEqual(
+    expect(journal.entries.find((entry: { idx: number }) => entry.idx === 4)).toEqual(
       expect.objectContaining({ idx: 4, tag: '0004_hotel_case_assignment_immutable' }),
     );
   });

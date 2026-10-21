@@ -36,6 +36,13 @@
       "when": 1792572021050,
       "tag": "0004_hotel_case_assignment_immutable",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792613513938,
+      "tag": "0005_hotel_versioned_directory",
+      "breakpoints": true
     }
   ]
 }

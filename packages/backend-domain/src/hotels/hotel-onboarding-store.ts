@@ -4,14 +4,19 @@ import type {
   HotelApplicationContent,
   HotelApplicationResponse,
   HotelBureauCaseResponse,
-  HotelLocation,
+  HotelLocationSearchQuery,
+  HotelLocationSearchResponse,
 } from '@ethio-tour/contracts';
 
 import type { RegistryActor } from '../registry/registry-store';
 
 export interface HotelBureauRoute {
   organizationId: string;
-  administrativeUnitId: string;
+  administrativeUnitId?: string;
+  geographyReleaseId?: string;
+  geographyUnitId?: string;
+  routingReleaseId?: string;
+  routingRuleId?: string;
 }
 
 export type HotelBureauRouteResolution =
@@ -35,12 +40,17 @@ export interface HotelPilotSettings {
 export interface HotelDecisionTarget {
   organizationId: string | null;
   administrativeUnitId: string | null;
+  geographyReleaseId?: string | null;
+  geographyUnitId?: string | null;
+  routingReleaseId?: string | null;
+  routingRuleId?: string | null;
   resourceIsSynthetic: boolean;
 }
 
 export interface HotelOnboardingTransaction {
-  listLocations(): Promise<HotelLocation[]>;
+  listLocations(query: HotelLocationSearchQuery): Promise<HotelLocationSearchResponse>;
   getAdministrativeUnitAncestorIds(unitId: string): Promise<string[]>;
+  getHotelGeographyAncestorUnitIds(geographyReleaseId: string, unitId: string): Promise<string[]>;
   getAuthorizationContext(actor: RegistryActor): Promise<AuthorizationContext>;
   createApplication(
     actor: RegistryActor,

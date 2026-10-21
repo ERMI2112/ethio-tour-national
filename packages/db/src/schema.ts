@@ -88,6 +88,276 @@ export const organizations = pgTable(
   ],
 );
 
+export const hotelGeographyReleases = pgTable(
+  'hotel_geography_releases',
+  {
+    id: text('id').primaryKey(),
+    sourceName: text('source_name').notNull(),
+    sourceEdition: text('source_edition').notNull(),
+    sourceReference: text('source_reference').notNull(),
+    effectiveFrom: timestamp('effective_from', { withTimezone: true }),
+    effectiveTo: timestamp('effective_to', { withTimezone: true }),
+    synthetic: boolean('synthetic').notNull(),
+    validationStatus: text('validation_status').default('draft').notNull(),
+    validationReport: jsonb('validation_report').$type<Record<string, unknown>>(),
+    validatedAt: timestamp('validated_at', { withTimezone: true }),
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      'hotel_geography_releases_status_check',
+      sql`${table.validationStatus} in ('draft', 'valid', 'invalid')`,
+    ),
+    check(
+      'hotel_geography_releases_dates_check',
+      sql`${table.effectiveTo} is null or ${table.effectiveFrom} is null or ${table.effectiveTo} >= ${table.effectiveFrom}`,
+    ),
+  ],
+);
+
+export const hotelGeographyUnits = pgTable('hotel_geography_units', {
+  id: text('id').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const hotelGeographyUnitRevisions = pgTable(
+  'hotel_geography_unit_revisions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    geographyReleaseId: text('geography_release_id')
+      .notNull()
+      .references(() => hotelGeographyReleases.id),
+    unitId: text('unit_id')
+      .notNull()
+      .references(() => hotelGeographyUnits.id),
+    parentRevisionId: uuid('parent_revision_id'),
+    unitType: text('unit_type').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('hotel_geography_unit_revisions_release_unit_uq').on(
+      table.geographyReleaseId,
+      table.unitId,
+    ),
+    uniqueIndex('hotel_geography_unit_revisions_release_revision_uq').on(
+      table.geographyReleaseId,
+      table.id,
+    ),
+    foreignKey({
+      columns: [table.geographyReleaseId, table.parentRevisionId],
+      foreignColumns: [table.geographyReleaseId, table.id],
+      name: 'hotel_geography_unit_revisions_parent_same_release_fk',
+    }),
+    check(
+      'hotel_geography_unit_revisions_parent_check',
+      sql`${table.parentRevisionId} is null or ${table.parentRevisionId} <> ${table.id}`,
+    ),
+    index('hotel_geography_unit_revisions_parent_idx').on(
+      table.geographyReleaseId,
+      table.parentRevisionId,
+    ),
+  ],
+);
+
+export const hotelGeographyNames = pgTable(
+  'hotel_geography_names',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    geographyReleaseId: text('geography_release_id').notNull(),
+    unitRevisionId: uuid('unit_revision_id').notNull(),
+    value: text('value').notNull(),
+    normalizedValue: text('normalized_value').notNull(),
+    languageTag: text('language_tag').notNull(),
+    script: text('script'),
+    nameKind: text('name_kind').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.geographyReleaseId, table.unitRevisionId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.id,
+      ],
+      name: 'hotel_geography_names_revision_release_fk',
+    }),
+    check('hotel_geography_names_kind_check', sql`${table.nameKind} in ('display', 'alias')`),
+    uniqueIndex('hotel_geography_names_revision_value_uq').on(
+      table.unitRevisionId,
+      table.normalizedValue,
+      table.languageTag,
+      table.script,
+      table.nameKind,
+    ),
+    index('hotel_geography_names_search_idx').on(table.geographyReleaseId, table.normalizedValue),
+  ],
+);
+
+export const hotelGeographyExternalIdentifiers = pgTable(
+  'hotel_geography_external_identifiers',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    geographyReleaseId: text('geography_release_id').notNull(),
+    unitRevisionId: uuid('unit_revision_id').notNull(),
+    sourceNamespace: text('source_namespace').notNull(),
+    sourceIdentifier: text('source_identifier').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.geographyReleaseId, table.unitRevisionId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.id,
+      ],
+      name: 'hotel_geography_external_identifiers_revision_release_fk',
+    }),
+    uniqueIndex('hotel_geography_external_identifiers_source_id_uq').on(
+      table.geographyReleaseId,
+      table.sourceNamespace,
+      table.sourceIdentifier,
+    ),
+  ],
+);
+
+export const hotelGeographyContinuity = pgTable(
+  'hotel_geography_continuity',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    fromReleaseId: text('from_release_id').notNull(),
+    fromUnitRevisionId: uuid('from_unit_revision_id').notNull(),
+    toReleaseId: text('to_release_id').notNull(),
+    toUnitRevisionId: uuid('to_unit_revision_id').notNull(),
+    relation: text('relation').notNull(),
+    confidence: text('confidence').notNull(),
+    provenance: text('provenance').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.fromReleaseId, table.fromUnitRevisionId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.id,
+      ],
+      name: 'hotel_geography_continuity_from_revision_fk',
+    }),
+    foreignKey({
+      columns: [table.toReleaseId, table.toUnitRevisionId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.id,
+      ],
+      name: 'hotel_geography_continuity_to_revision_fk',
+    }),
+    check(
+      'hotel_geography_continuity_releases_check',
+      sql`${table.fromReleaseId} <> ${table.toReleaseId}`,
+    ),
+    check(
+      'hotel_geography_continuity_relation_check',
+      sql`${table.relation} in ('same_entity', 'renamed', 'split_into', 'merged_into', 'possible_successor', 'no_claim')`,
+    ),
+    check(
+      'hotel_geography_continuity_confidence_check',
+      sql`${table.confidence} in ('asserted', 'uncertain')`,
+    ),
+  ],
+);
+
+export const hotelRoutingReleases = pgTable(
+  'hotel_routing_releases',
+  {
+    id: text('id').primaryKey(),
+    geographyReleaseId: text('geography_release_id')
+      .notNull()
+      .references(() => hotelGeographyReleases.id),
+    sourceName: text('source_name').notNull(),
+    sourceEdition: text('source_edition').notNull(),
+    provenance: text('provenance').notNull(),
+    synthetic: boolean('synthetic').notNull(),
+    validatedAt: timestamp('validated_at', { withTimezone: true }),
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('hotel_routing_releases_pair_uq').on(table.id, table.geographyReleaseId),
+    index('hotel_routing_releases_geography_idx').on(table.geographyReleaseId),
+  ],
+);
+
+export const hotelRoutingRules = pgTable(
+  'hotel_routing_rules',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    routingReleaseId: text('routing_release_id').notNull(),
+    geographyReleaseId: text('geography_release_id').notNull(),
+    matchUnitId: text('match_unit_id').notNull(),
+    matchMode: text('match_mode').notNull(),
+    bureauOrganizationId: text('bureau_organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    scopeUnitId: text('scope_unit_id').notNull(),
+    enabled: boolean('enabled').default(true).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.routingReleaseId, table.geographyReleaseId],
+      foreignColumns: [hotelRoutingReleases.id, hotelRoutingReleases.geographyReleaseId],
+      name: 'hotel_routing_rules_release_pair_fk',
+    }),
+    foreignKey({
+      columns: [table.geographyReleaseId, table.matchUnitId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.unitId,
+      ],
+      name: 'hotel_routing_rules_match_unit_release_fk',
+    }),
+    foreignKey({
+      columns: [table.geographyReleaseId, table.scopeUnitId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.unitId,
+      ],
+      name: 'hotel_routing_rules_scope_unit_release_fk',
+    }),
+    uniqueIndex('hotel_routing_rules_assignment_uq').on(
+      table.id,
+      table.routingReleaseId,
+      table.geographyReleaseId,
+    ),
+    uniqueIndex('hotel_routing_rules_scope_uq').on(table.id, table.scopeUnitId),
+    uniqueIndex('hotel_routing_rules_organization_uq').on(table.id, table.bureauOrganizationId),
+    check(
+      'hotel_routing_rules_match_mode_check',
+      sql`${table.matchMode} in ('exact', 'descendants')`,
+    ),
+    index('hotel_routing_rules_match_idx').on(
+      table.routingReleaseId,
+      table.geographyReleaseId,
+      table.matchUnitId,
+      table.enabled,
+    ),
+  ],
+);
+
+export const hotelActiveReleasePair = pgTable(
+  'hotel_active_release_pair',
+  {
+    singleton: integer('singleton').primaryKey(),
+    geographyReleaseId: text('geography_release_id').notNull(),
+    routingReleaseId: text('routing_release_id').notNull(),
+    activatedAt: timestamp('activated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.routingReleaseId, table.geographyReleaseId],
+      foreignColumns: [hotelRoutingReleases.id, hotelRoutingReleases.geographyReleaseId],
+      name: 'hotel_active_release_pair_compatible_fk',
+    }),
+    check('hotel_active_release_pair_singleton_check', sql`${table.singleton} = 1`),
+  ],
+);
+
 export const hotelLocations = pgTable('hotel_locations', {
   administrativeUnitId: text('administrative_unit_id')
     .primaryKey()
@@ -119,7 +389,12 @@ export const hotelApplications = pgTable(
       .notNull()
       .references(() => userProfiles.id),
     draftContent: jsonb('draft_content')
-      .$type<{ claimedHotelName: string; applicantNotes: string; administrativeUnitId?: string }>()
+      .$type<{
+        claimedHotelName: string;
+        applicantNotes: string;
+        administrativeUnitId?: string;
+        locationSelection?: { geographyReleaseId: string; unitId: string; unitRevisionId: string };
+      }>()
       .notNull(),
     status: text('status').default('draft').notNull(),
     admissionStatus: text('admission_status').default('not_eligible').notNull(),
@@ -162,12 +437,25 @@ export const hotelApplicationVersions = pgTable(
       .references(() => hotelApplications.id),
     versionNumber: integer('version_number').notNull(),
     content: jsonb('content')
-      .$type<{ claimedHotelName: string; applicantNotes: string; administrativeUnitId?: string }>()
+      .$type<{
+        claimedHotelName: string;
+        applicantNotes: string;
+        administrativeUnitId?: string;
+        locationSelection?: { geographyReleaseId: string; unitId: string; unitRevisionId: string };
+      }>()
       .notNull(),
     locationUnitId: text('location_unit_id').references(() => administrativeUnits.id),
     locationSnapshot: jsonb('location_snapshot').$type<HotelLocation>(),
     bureauOrganizationId: text('bureau_organization_id').references(() => organizations.id),
     scopeUnitId: text('scope_unit_id').references(() => administrativeUnits.id),
+    geographyReleaseId: text('geography_release_id').references(() => hotelGeographyReleases.id),
+    locationRevisionId: uuid('location_revision_id'),
+    submittedLocationSnapshot: jsonb('submitted_location_snapshot').$type<
+      Record<string, unknown>
+    >(),
+    routingReleaseId: text('routing_release_id').references(() => hotelRoutingReleases.id),
+    routingRuleId: uuid('routing_rule_id'),
+    resolvedScopeUnitId: text('resolved_scope_unit_id'),
     submittedByProfileId: uuid('submitted_by_profile_id')
       .notNull()
       .references(() => userProfiles.id),
@@ -179,14 +467,63 @@ export const hotelApplicationVersions = pgTable(
       table.versionNumber,
     ),
     uniqueIndex('hotel_application_versions_app_id_uq').on(table.applicationId, table.id),
+    uniqueIndex('hotel_application_versions_release_assignment_uq').on(
+      table.id,
+      table.geographyReleaseId,
+      table.locationRevisionId,
+      table.routingReleaseId,
+      table.routingRuleId,
+      table.bureauOrganizationId,
+      table.resolvedScopeUnitId,
+    ),
+    foreignKey({
+      columns: [table.geographyReleaseId, table.locationRevisionId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.id,
+      ],
+      name: 'hotel_application_versions_location_revision_release_fk',
+    }),
+    foreignKey({
+      columns: [table.routingReleaseId, table.geographyReleaseId],
+      foreignColumns: [hotelRoutingReleases.id, hotelRoutingReleases.geographyReleaseId],
+      name: 'hotel_application_versions_routing_release_pair_fk',
+    }),
+    foreignKey({
+      columns: [table.routingRuleId, table.routingReleaseId, table.geographyReleaseId],
+      foreignColumns: [
+        hotelRoutingRules.id,
+        hotelRoutingRules.routingReleaseId,
+        hotelRoutingRules.geographyReleaseId,
+      ],
+      name: 'hotel_application_versions_routing_rule_fk',
+    }),
+    foreignKey({
+      columns: [table.routingRuleId, table.resolvedScopeUnitId],
+      foreignColumns: [hotelRoutingRules.id, hotelRoutingRules.scopeUnitId],
+      name: 'hotel_application_versions_routing_scope_fk',
+    }),
+    foreignKey({
+      columns: [table.routingRuleId, table.bureauOrganizationId],
+      foreignColumns: [hotelRoutingRules.id, hotelRoutingRules.bureauOrganizationId],
+      name: 'hotel_application_versions_routing_organization_fk',
+    }),
     check('hotel_application_versions_number_check', sql`${table.versionNumber} > 0`),
     check(
       'hotel_application_versions_routing_complete_check',
-      sql`(${table.locationUnitId} is null and ${table.locationSnapshot} is null and ${table.bureauOrganizationId} is null and ${table.scopeUnitId} is null) or (${table.locationUnitId} is not null and ${table.locationSnapshot} is not null and ${table.bureauOrganizationId} is not null and ${table.scopeUnitId} is not null)`,
+      sql`(${table.locationUnitId} is null and ${table.locationSnapshot} is null and ${table.bureauOrganizationId} is null and ${table.scopeUnitId} is null) or (${table.locationUnitId} is not null and ${table.locationSnapshot} is not null and ${table.bureauOrganizationId} is not null and ${table.scopeUnitId} is not null) or (${table.locationUnitId} is null and ${table.locationSnapshot} is null and ${table.bureauOrganizationId} is not null and ${table.scopeUnitId} is null and ${table.geographyReleaseId} is not null and ${table.locationRevisionId} is not null and ${table.routingReleaseId} is not null and ${table.routingRuleId} is not null and ${table.resolvedScopeUnitId} is not null and jsonb_typeof(${table.submittedLocationSnapshot}) = 'object')`,
     ),
     check(
       'hotel_application_versions_routing_consistency_check',
       sql`${table.locationUnitId} is null or (${table.scopeUnitId} = ${table.locationUnitId} and jsonb_typeof(${table.locationSnapshot}) = 'object' and (${table.locationSnapshot}->>'id' = ${table.locationUnitId}) is true and (not (${table.locationSnapshot} ? 'administrativeUnitId') or (${table.locationSnapshot}->>'administrativeUnitId' = ${table.locationUnitId}) is true) and (${table.content}->>'administrativeUnitId' = ${table.locationUnitId}) is true)`,
+    ),
+    check(
+      'hotel_application_versions_release_assignment_complete_check',
+      sql`(${table.geographyReleaseId} is null and ${table.locationRevisionId} is null and ${table.submittedLocationSnapshot} is null and ${table.routingReleaseId} is null and ${table.routingRuleId} is null and ${table.resolvedScopeUnitId} is null) or (${table.geographyReleaseId} is not null and ${table.locationRevisionId} is not null and jsonb_typeof(${table.submittedLocationSnapshot}) = 'object' and ${table.routingReleaseId} is not null and ${table.routingRuleId} is not null and ${table.bureauOrganizationId} is not null and ${table.scopeUnitId} is null and ${table.locationUnitId} is null and ${table.locationSnapshot} is null and ${table.resolvedScopeUnitId} is not null)`,
+    ),
+    check(
+      'hotel_application_versions_release_assignment_consistency_check',
+      sql`${table.geographyReleaseId} is null or ((${table.content}->'locationSelection'->>'geographyReleaseId' = ${table.geographyReleaseId}) is true and (${table.content}->'locationSelection'->>'unitRevisionId' = ${table.locationRevisionId}::text) is true and (${table.submittedLocationSnapshot}->>'geographyReleaseId' = ${table.geographyReleaseId}) is true and (${table.submittedLocationSnapshot}->>'unitRevisionId' = ${table.locationRevisionId}::text) is true)`,
     ),
     index('hotel_application_versions_submitted_idx').on(table.submittedAt),
   ],
@@ -201,9 +538,12 @@ export const hotelBureauCases = pgTable(
     bureauOrganizationId: text('bureau_organization_id')
       .notNull()
       .references(() => organizations.id),
-    scopeUnitId: text('scope_unit_id')
-      .notNull()
-      .references(() => administrativeUnits.id),
+    scopeUnitId: text('scope_unit_id').references(() => administrativeUnits.id),
+    geographyReleaseId: text('geography_release_id'),
+    locationRevisionId: uuid('location_revision_id'),
+    routingReleaseId: text('routing_release_id'),
+    routingRuleId: uuid('routing_rule_id'),
+    scopeGeographyUnitId: text('scope_geography_unit_id'),
     status: text('status').default('in_review').notNull(),
     version: integer('version').default(1).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -214,15 +554,47 @@ export const hotelBureauCases = pgTable(
       foreignColumns: [hotelApplicationVersions.applicationId, hotelApplicationVersions.id],
       name: 'hotel_bureau_cases_version_fk',
     }),
+    foreignKey({
+      columns: [
+        table.applicationVersionId,
+        table.geographyReleaseId,
+        table.locationRevisionId,
+        table.routingReleaseId,
+        table.routingRuleId,
+        table.bureauOrganizationId,
+        table.scopeGeographyUnitId,
+      ],
+      foreignColumns: [
+        hotelApplicationVersions.id,
+        hotelApplicationVersions.geographyReleaseId,
+        hotelApplicationVersions.locationRevisionId,
+        hotelApplicationVersions.routingReleaseId,
+        hotelApplicationVersions.routingRuleId,
+        hotelApplicationVersions.bureauOrganizationId,
+        hotelApplicationVersions.resolvedScopeUnitId,
+      ],
+      name: 'hotel_bureau_cases_release_assignment_fk',
+    }),
     uniqueIndex('hotel_bureau_cases_version_uq').on(table.applicationVersionId),
     check(
       'hotel_bureau_cases_status_check',
       sql`${table.status} in ('submitted', 'in_review', 'approved', 'changes_requested', 'rejected')`,
     ),
     check('hotel_bureau_cases_version_check', sql`${table.version} > 0`),
+    check(
+      'hotel_bureau_cases_release_assignment_complete_check',
+      sql`(${table.geographyReleaseId} is null and ${table.locationRevisionId} is null and ${table.routingReleaseId} is null and ${table.routingRuleId} is null and ${table.scopeGeographyUnitId} is null and ${table.scopeUnitId} is not null) or (${table.geographyReleaseId} is not null and ${table.locationRevisionId} is not null and ${table.routingReleaseId} is not null and ${table.routingRuleId} is not null and ${table.scopeGeographyUnitId} is not null and ${table.scopeUnitId} is null)`,
+    ),
     index('hotel_bureau_cases_queue_idx').on(
       table.bureauOrganizationId,
       table.scopeUnitId,
+      table.status,
+      table.createdAt,
+    ),
+    index('hotel_bureau_cases_release_queue_idx').on(
+      table.bureauOrganizationId,
+      table.geographyReleaseId,
+      table.scopeGeographyUnitId,
       table.status,
       table.createdAt,
     ),
@@ -375,14 +747,35 @@ export const grantScopes = pgTable(
     grantId: uuid('grant_id')
       .notNull()
       .references(() => accessGrants.id),
-    administrativeUnitId: text('administrative_unit_id')
-      .notNull()
-      .references(() => administrativeUnits.id),
+    administrativeUnitId: text('administrative_unit_id').references(() => administrativeUnits.id),
     includeDescendants: boolean('include_descendants').default(false).notNull(),
+    hotelGeographyReleaseId: text('hotel_geography_release_id'),
+    hotelGeographyUnitId: text('hotel_geography_unit_id'),
   },
   (table) => [
     uniqueIndex('grant_scopes_grant_unit_uq').on(table.grantId, table.administrativeUnitId),
+    uniqueIndex('grant_scopes_grant_hotel_geo_uq').on(
+      table.grantId,
+      table.hotelGeographyReleaseId,
+      table.hotelGeographyUnitId,
+    ),
+    foreignKey({
+      columns: [table.hotelGeographyReleaseId, table.hotelGeographyUnitId],
+      foreignColumns: [
+        hotelGeographyUnitRevisions.geographyReleaseId,
+        hotelGeographyUnitRevisions.unitId,
+      ],
+      name: 'grant_scopes_hotel_geography_unit_fk',
+    }),
+    check(
+      'grant_scopes_exactly_one_geography_check',
+      sql`(${table.administrativeUnitId} is not null and ${table.hotelGeographyReleaseId} is null and ${table.hotelGeographyUnitId} is null) or (${table.administrativeUnitId} is null and ${table.hotelGeographyReleaseId} is not null and ${table.hotelGeographyUnitId} is not null)`,
+    ),
     index('grant_scopes_unit_idx').on(table.administrativeUnitId),
+    index('grant_scopes_hotel_geography_idx').on(
+      table.hotelGeographyReleaseId,
+      table.hotelGeographyUnitId,
+    ),
   ],
 );
 
@@ -629,6 +1022,15 @@ export const schema = {
   administrativeUnits,
   administrativeUnitPaths,
   organizations,
+  hotelGeographyReleases,
+  hotelGeographyUnits,
+  hotelGeographyUnitRevisions,
+  hotelGeographyNames,
+  hotelGeographyExternalIdentifiers,
+  hotelGeographyContinuity,
+  hotelRoutingReleases,
+  hotelRoutingRules,
+  hotelActiveReleasePair,
   hotelLocations,
   hotelLocationRoutes,
   hotelApplications,

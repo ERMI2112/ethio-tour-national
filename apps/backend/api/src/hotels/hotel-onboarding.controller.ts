@@ -6,6 +6,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import {
   DecideHotelAdmissionDto,
   DecideHotelApplicationDto,
   CreateHotelApplicationDto,
+  HotelLocationSearchQueryDto,
   SubmitHotelApplicationDto,
   UpdateHotelApplicationDto,
 } from './hotel-onboarding.dto';
@@ -34,8 +36,8 @@ export class HotelApplicationsController {
   constructor(@Inject(HotelOnboardingService) private readonly hotels: HotelOnboardingService) {}
 
   @Get('locations')
-  locations(@CurrentActor() actor: RegistryActor) {
-    return this.hotels.listLocations(actor);
+  locations(@CurrentActor() actor: RegistryActor, @Query() query: HotelLocationSearchQueryDto) {
+    return this.hotels.listLocations(actor, query);
   }
 
   @Get('applications')

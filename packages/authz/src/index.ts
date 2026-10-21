@@ -21,8 +21,10 @@ export interface AuthorizationMembership {
 }
 
 export interface GrantScope {
-  administrativeUnitId: string;
+  administrativeUnitId?: string;
   includeDescendants: boolean;
+  hotelGeographyReleaseId?: string;
+  hotelGeographyUnitId?: string;
 }
 
 export interface AuthorizationGrant {
@@ -48,6 +50,9 @@ export interface AuthorizationRequirement {
   organizationId?: string;
   administrativeUnitId?: string;
   administrativeUnitAncestorIds?: readonly string[];
+  hotelGeographyReleaseId?: string;
+  hotelGeographyUnitId?: string;
+  hotelGeographyAncestorUnitIds?: readonly string[];
   resourceIsSynthetic?: boolean;
 }
 
@@ -148,16 +153,30 @@ export function authorize(
       continue;
     }
 
-    if (requirement.administrativeUnitId) {
+    if (requirement.administrativeUnitId !== undefined) {
       const ancestors = new Set(requirement.administrativeUnitAncestorIds ?? []);
       const coversUnit = grant.scopes.some(
         (scope) =>
           scope.administrativeUnitId === requirement.administrativeUnitId ||
-          (scope.includeDescendants && ancestors.has(scope.administrativeUnitId)),
+          (scope.includeDescendants &&
+            scope.administrativeUnitId !== undefined &&
+            ancestors.has(scope.administrativeUnitId)),
       );
       if (!coversUnit) {
         continue;
       }
+    }
+
+    if (requirement.hotelGeographyUnitId !== undefined) {
+      if (!requirement.hotelGeographyReleaseId) continue;
+      const ancestors = new Set(requirement.hotelGeographyAncestorUnitIds ?? []);
+      const coversUnit = grant.scopes.some(
+        (scope) =>
+          scope.hotelGeographyReleaseId === requirement.hotelGeographyReleaseId &&
+          (scope.hotelGeographyUnitId === requirement.hotelGeographyUnitId ||
+            (scope.includeDescendants && ancestors.has(scope.hotelGeographyUnitId ?? ''))),
+      );
+      if (!coversUnit) continue;
     }
 
     sawMatchingScope = true;

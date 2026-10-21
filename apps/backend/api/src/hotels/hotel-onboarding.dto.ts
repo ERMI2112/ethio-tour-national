@@ -3,7 +3,10 @@ import {
   IsDefined,
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
+  IsUUID,
+  Max,
   MaxLength,
   Min,
   ValidateIf,
@@ -12,11 +15,59 @@ import {
 
 import type { HotelAdmissionDecision, HotelApplicationDecision } from '@ethio-tour/contracts';
 
+export class HotelLocationSelectionDto {
+  @IsDefined()
+  @IsString()
+  @MaxLength(100)
+  geographyReleaseId!: string;
+
+  @IsDefined()
+  @IsString()
+  @MaxLength(200)
+  unitId!: string;
+
+  @IsDefined()
+  @IsString()
+  @MaxLength(100)
+  @IsUUID()
+  unitRevisionId!: string;
+}
+
+export class HotelLocationSearchQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  query?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(35)
+  language?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  cursor?: string;
+}
+
 export class HotelApplicationContentDto {
+  /** Legacy field accepted only when preserving a pre-directory private draft. */
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MaxLength(200)
   administrativeUnitId?: string;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @ValidateNested()
+  @Type(() => HotelLocationSelectionDto)
+  locationSelection?: HotelLocationSelectionDto;
 
   @IsDefined()
   @IsString()

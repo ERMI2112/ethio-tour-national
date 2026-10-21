@@ -60,7 +60,11 @@ describe('hotel multi-office additive migration without services', () => {
     const config = getTableConfig(hotelApplicationVersions);
     const dialect = new PgDialect();
     for (const constraint of config.checks.filter((check) => check.name.includes('routing_'))) {
-      const expression = dialect.sqlToQuery(constraint.value).sql;
+      // Historical migrations are compared with their own snapshot; later additive
+      // migrations may broaden a constraint without rewriting the original file.
+      const expression =
+        snapshot.tables['public.hotel_application_versions'].checkConstraints[constraint.name]
+          .value;
       expect(migration).toContain(`ADD CONSTRAINT "${constraint.name}" CHECK (${expression})`);
       expect(
         snapshot.tables['public.hotel_application_versions'].checkConstraints[constraint.name]

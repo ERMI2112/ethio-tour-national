@@ -7,7 +7,9 @@ import { HotelOnboardingError } from '@ethio-tour/backend-domain';
 export class HotelOnboardingExceptionFilter implements ExceptionFilter<HotelOnboardingError> {
   catch(exception: HotelOnboardingError, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<{
-      status(code: number): { json(body: { statusCode: number; message: string }): void };
+      status(code: number): {
+        json(body: { statusCode: number; message: string; code?: string }): void;
+      };
     }>();
     const statusCode = {
       unauthenticated: 401,
@@ -25,6 +27,10 @@ export class HotelOnboardingExceptionFilter implements ExceptionFilter<HotelOnbo
       invalid: exception.reason,
       unavailable: 'The synthetic hotel pilot is unavailable.',
     }[exception.code];
-    response.status(statusCode).json({ statusCode, message });
+    response.status(statusCode).json({
+      statusCode,
+      message,
+      ...(exception.errorCode ? { code: exception.errorCode } : {}),
+    });
   }
 }
