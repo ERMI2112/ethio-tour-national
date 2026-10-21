@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isDisposableHotelTestDatabase } from '@ethio-tour/db/testing/disposable-database-target';
-import { createDatabase } from '@ethio-tour/db';
+import { createDatabase, provisionSyntheticHotelReleasePair } from '@ethio-tour/db';
+import type { HotelLocationSelection } from '@ethio-tour/contracts';
 
 import { HotelOnboardingService } from './hotel-onboarding-service';
 import { PostgresHotelOnboardingStore } from './postgres-hotel-onboarding-store';
@@ -14,98 +15,95 @@ const safeDatabase = isDisposableHotelTestDatabase(
   databaseUrl,
   process.env.HOTEL_PILOT_TEST_DISPOSABLE,
 );
-const requiredRun = process.env.HOTEL_PILOT_TEST_REQUIRED === 'true';
-if (requiredRun && !safeDatabase) {
-  throw new Error(
-    'HOTEL_PILOT_TEST_REQUIRED=true requires HOTEL_PILOT_TEST_DISPOSABLE=true and a guarded disposable database URL.',
-  );
+if (process.env.HOTEL_PILOT_TEST_REQUIRED === 'true' && !safeDatabase) {
+  throw new Error('Required hotel tests need the guarded disposable HOTEL_PILOT_TEST_* target.');
 }
 const suite = describe.skipIf(!safeDatabase);
-
+const issuer = 'https://identity.example.test/realms/synthetic-hotel';
 let client: postgres.Sql;
+let suiteLock: postgres.Sql;
 let service: HotelOnboardingService;
-let issuer: string;
-let selectedUnitId: string;
+let selectedLocation: HotelLocationSelection;
 
 beforeAll(async () => {
   if (!safeDatabase || !databaseUrl) return;
+  // Both suites activate the singleton pair; serialize them using a dedicated session.
+  suiteLock = postgres(databaseUrl, { max: 1 });
+  await suiteLock.unsafe("SET lock_timeout = '90s'");
+  await suiteLock.unsafe('SELECT pg_advisory_lock(20261021, 71501)');
   client = postgres(databaseUrl, { max: 8 });
   const [migration] = await client.unsafe<{ exists: boolean }[]>(
-    `SELECT to_regclass('public.hotel_applications') IS NOT NULL
-       AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'hotel_bureau_case_binding_immutable' AND NOT tgisinternal)
-       AS exists`,
+    `SELECT to_regclass('public.hotel_active_release_pair') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'hotel_versioned_submission_guard' AND NOT tgisinternal)
+     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'hotel_bureau_case_binding_immutable' AND NOT tgisinternal) AS exists`,
   );
-  if (!migration?.exists) throw new Error('Disposable database is missing hotel migration 0004.');
-  service = new HotelOnboardingService(new PostgresHotelOnboardingStore(client), {
-    enabled: true,
-    production: false,
-    administratorOrganizationId: `hotel-test-platform-${randomUUID()}`,
-  });
-});
+  if (!migration?.exists) throw new Error('Disposable database is missing hotel migration 0005.');
+}, 120_000);
 
 afterAll(async () => {
-  if (client) await client.end({ timeout: 5 });
+  try {
+    if (client) await client.end({ timeout: 5 });
+  } finally {
+    if (suiteLock) await suiteLock.end({ timeout: 5 });
+  }
 });
 
 suite('synthetic hotel onboarding PostgreSQL integration', () => {
   it.each(['raw', 'api-factory'])(
-    'stores matching object JSONB and denial audits with the %s client',
+    'stores object JSONB, immutable release bindings and denial audits with %s',
     async (driver) => {
-      const f = await seedFixture();
+      const f = await fixture();
       const apiClient = driver === 'api-factory' ? createDatabase(databaseUrl!).client : null;
-      const scopedService = apiClient
-        ? new HotelOnboardingService(new PostgresHotelOnboardingStore(apiClient), {
-            enabled: true,
-            production: false,
-            administratorOrganizationId: null,
-          })
+      const scoped = apiClient
+        ? new HotelOnboardingService(new PostgresHotelOnboardingStore(apiClient), f.settings)
         : service;
       try {
-        const created = await scopedService.createApplication(f.applicant, { content: content() });
-        const updated = await scopedService.updateDraft(
-          f.applicant,
-          created.id,
-          created.version,
-          content(),
-        );
-        await scopedService.submitApplication(f.applicant, created.id, updated.version);
+        const draft = await scoped.createApplication(f.applicant, { content: content() });
+        const updated = await scoped.updateDraft(f.applicant, draft.id, draft.version, content());
+        const submitted = await scoped.submitApplication(f.applicant, draft.id, updated.version);
         const [stored] = await client.unsafe(
-          `SELECT
-      jsonb_typeof(a.draft_content) AS draft_type,
-      jsonb_typeof(v.content) AS content_type,
-      jsonb_typeof(v.location_snapshot) AS snapshot_type,
-      v.content->>'administrativeUnitId' AS content_id,
-      v.location_snapshot->>'id' AS snapshot_id,
-      v.location_unit_id, v.scope_unit_id, v.bureau_organization_id
-      FROM hotel_applications a JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id
-      WHERE a.id = $1`,
-          [created.id],
+          `SELECT jsonb_typeof(a.draft_content) AS draft_type, jsonb_typeof(v.content) AS content_type,
+         jsonb_typeof(v.submitted_location_snapshot) AS snapshot_type,
+         v.content->'locationSelection'->>'unitId' AS content_id,
+         v.submitted_location_snapshot->>'unitId' AS snapshot_id,
+         v.geography_release_id, v.location_revision_id, v.routing_release_id, v.routing_rule_id,
+         v.resolved_scope_unit_id, v.scope_unit_id, v.location_unit_id, v.bureau_organization_id
+         FROM hotel_applications a JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id WHERE a.id = $1`,
+          [draft.id],
         );
         expect(stored).toEqual({
           draft_type: 'object',
           content_type: 'object',
           snapshot_type: 'object',
-          content_id: f.route.administrativeUnitId,
-          snapshot_id: f.route.administrativeUnitId,
-          location_unit_id: f.route.administrativeUnitId,
-          scope_unit_id: f.route.administrativeUnitId,
-          bureau_organization_id: f.route.organizationId,
+          content_id: f.selection.unitId,
+          snapshot_id: f.selection.unitId,
+          geography_release_id: f.selection.geographyReleaseId,
+          location_revision_id: f.selection.unitRevisionId,
+          routing_release_id: f.routingReleaseId,
+          routing_rule_id: f.ruleId,
+          resolved_scope_unit_id: f.selection.unitId,
+          scope_unit_id: null,
+          location_unit_id: null,
+          bureau_organization_id: f.bureauOrganizationId,
+        });
+        expect(submitted).toMatchObject({
+          location: f.selection,
+          locationState: 'submitted_snapshot',
         });
         const audits = await client.unsafe(
-          `SELECT jsonb_typeof(details) AS details_type FROM audit_events
-      WHERE target_resource_id = $1 AND action IN ('hotel.application.created', 'hotel.application.draft_updated', 'hotel.application.submitted')`,
-          [created.id],
+          `SELECT jsonb_typeof(details) AS details_type FROM audit_events WHERE target_resource_id = $1
+         AND action IN ('hotel.application.created', 'hotel.application.draft_updated', 'hotel.application.submitted')`,
+          [draft.id],
         );
         expect(audits).toHaveLength(3);
         expect(audits.every((row) => row.details_type === 'object')).toBe(true);
-        await expect(scopedService.listBureauCases(f.applicant)).rejects.toMatchObject({
+        await expect(scoped.listBureauCases(f.applicant)).rejects.toMatchObject({
           code: 'forbidden',
         });
         const [denial] = await client.unsafe(
-          `SELECT jsonb_typeof(details) AS details_type, outcome
-      FROM audit_events WHERE actor_issuer = $1 AND actor_subject_id = $2
-      AND action = 'hotel.application.bureau.queue' ORDER BY created_at DESC LIMIT 1`,
-          [f.applicant.issuer, f.applicant.subjectId],
+          `SELECT jsonb_typeof(details) AS details_type, outcome FROM audit_events WHERE actor_subject_id = $1
+         AND action = 'hotel.application.bureau.queue' ORDER BY created_at DESC LIMIT 1`,
+          [f.applicant.subjectId],
         );
         expect(denial).toEqual({ details_type: 'object', outcome: 'denied' });
       } finally {
@@ -115,31 +113,31 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
   );
 
   it.each(['submit', 'update-then-submit'])(
-    'reads legacy string drafts and writes object snapshots on %s',
+    'reads double-encoded private drafts and stores release-bound object JSON on %s',
     async (flow) => {
-      const f = await seedFixture();
-      const draft = content();
-      const created = await service.createApplication(f.applicant, { content: draft });
-      // Explicit JSON string reproduces historical double-encoded private drafts.
-      await client.unsafe(`UPDATE hotel_applications SET draft_content = $2::jsonb WHERE id = $1`, [
-        created.id,
-        client.json(JSON.stringify(draft)),
+      const f = await fixture();
+      const draftContent = content();
+      const draft = await service.createApplication(f.applicant, { content: draftContent });
+      await client.unsafe('UPDATE hotel_applications SET draft_content = $2::jsonb WHERE id = $1', [
+        draft.id,
+        client.json(JSON.stringify(draftContent)),
       ]);
-      expect((await service.getMyApplication(f.applicant, created.id)).content).toEqual(draft);
+      expect((await service.getMyApplication(f.applicant, draft.id)).content).toEqual(draftContent);
       const ready =
-        flow === 'update-then-submit'
-          ? await service.updateDraft(f.applicant, created.id, created.version, {
-              ...draft,
-              applicantNotes: 'Updated legacy draft',
-            })
-          : created;
-      const submitted = await service.submitApplication(f.applicant, created.id, ready.version);
-      expect(submitted.content.administrativeUnitId).toBe(f.route.administrativeUnitId);
+        flow === 'submit'
+          ? draft
+          : await service.updateDraft(f.applicant, draft.id, draft.version, {
+              ...draftContent,
+              applicantNotes: 'Updated legacy encoding.',
+            });
+      expect(
+        (await service.submitApplication(f.applicant, draft.id, ready.version)).location,
+      ).toMatchObject(f.selection);
       const [stored] = await client.unsafe(
-        `SELECT jsonb_typeof(a.draft_content) AS draft_type,
-      jsonb_typeof(v.content) AS content_type, jsonb_typeof(v.location_snapshot) AS snapshot_type
-      FROM hotel_applications a JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id WHERE a.id = $1`,
-        [created.id],
+        `SELECT jsonb_typeof(a.draft_content) AS draft_type, jsonb_typeof(v.content) AS content_type,
+       jsonb_typeof(v.submitted_location_snapshot) AS snapshot_type FROM hotel_applications a
+       JOIN hotel_application_versions v ON v.id = a.current_submitted_version_id WHERE a.id = $1`,
+        [draft.id],
       );
       expect(stored).toEqual({
         draft_type: flow === 'submit' ? 'string' : 'object',
@@ -149,580 +147,232 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     },
   );
 
-  it('blocks route insertion phantoms and location disabling until submission commits', async () => {
-    const f = await seedFixture();
-    const created = await service.createApplication(f.applicant, { content: content() });
-    const store = new PostgresHotelOnboardingStore(client);
-    await store.transaction(async (tx) => {
-      await tx.submitApplication(f.applicant, created.id, created.version);
-      for (const statement of [
-        `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
-        `UPDATE hotel_locations SET enabled = false WHERE administrative_unit_id = $1 AND $2::text IS NOT NULL`,
-      ]) {
-        await expect(
-          client.begin(async (sql) => {
-            await sql.unsafe(`SET LOCAL lock_timeout = '150ms'`);
-            await sql.unsafe(statement, [
-              f.route.administrativeUnitId,
-              f.otherBureauOrganizationId,
-            ]);
-          }),
-        ).rejects.toMatchObject({ code: '55P03' });
-      }
-    });
-    expect((await service.getMyApplication(f.applicant, created.id)).status).toBe('submitted');
-  });
-
-  it('isolates office A/B queues, detail and decisions using saved assignments', async () => {
-    const a = await seedFixture();
-    const createdA = await service.createApplication(a.applicant, { content: content() });
-    const submittedA = await service.submitApplication(a.applicant, createdA.id, createdA.version);
-    const caseA = await getCaseId(createdA.id);
-    const b = await seedFixture();
-    const createdB = await service.createApplication(b.applicant, { content: content() });
-    await service.submitApplication(b.applicant, createdB.id, createdB.version);
-    const caseB = await getCaseId(createdB.id);
-    expect((await service.listBureauCases(a.reviewer)).items.map((item) => item.caseId)).toEqual([
-      caseA,
-    ]);
-    expect((await service.listBureauCases(b.reviewer)).items.map((item) => item.caseId)).toEqual([
-      caseB,
-    ]);
-    await expect(service.getBureauCase(a.reviewer, caseB)).rejects.toMatchObject({
-      code: 'not_found',
-    });
-    await expect(service.getBureauCase(b.reviewer, caseA)).rejects.toMatchObject({
-      code: 'not_found',
-    });
-    await expect(
-      service.decideBureauCase(b.reviewer, caseA, {
-        expectedVersion: submittedA.version,
-        decision: 'approve',
-        reason: 'Wrong office',
-      }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
-    const caseLocation = (await service.getBureauCase(a.reviewer, caseA)).location;
-    expect(caseLocation && 'unitId' in caseLocation ? caseLocation.unitId : null).toBe(
-      a.route.administrativeUnitId,
-    );
-  });
-
-  it.each([
-    'missing-location',
-    'missing-route',
-    'disabled-location',
-    'disabled-route',
-    'ambiguous',
-    'non-synthetic-office',
-    'non-synthetic-location',
-  ])('preserves draft atomically for %s', async (failure) => {
-    const f = await seedFixture();
-    const draft = content();
-    if (failure === 'missing-location')
-      delete (draft as Partial<typeof draft>).administrativeUnitId;
-    if (failure === 'missing-route')
-      await client.unsafe(`DELETE FROM hotel_location_routes WHERE location_unit_id = $1`, [
-        f.route.administrativeUnitId,
-      ]);
-    if (failure === 'disabled-location')
-      await client.unsafe(
-        `UPDATE hotel_locations SET enabled = false WHERE administrative_unit_id = $1`,
-        [f.route.administrativeUnitId],
-      );
-    if (failure === 'disabled-route')
-      await client.unsafe(
-        `UPDATE hotel_location_routes SET enabled = false WHERE location_unit_id = $1`,
-        [f.route.administrativeUnitId],
-      );
-    if (failure === 'ambiguous')
-      await client.unsafe(
-        `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
-        [f.route.administrativeUnitId, f.otherBureauOrganizationId],
-      );
-    if (failure === 'non-synthetic-office')
-      await client.unsafe(`UPDATE organizations SET is_synthetic = false WHERE id = $1`, [
-        f.route.organizationId,
-      ]);
-    if (failure === 'non-synthetic-location')
-      await client.unsafe(`UPDATE administrative_units SET is_synthetic = false WHERE id = $1`, [
-        f.route.administrativeUnitId,
-      ]);
-    const created = await service.createApplication(f.applicant, { content: draft });
-    await expect(
-      service.submitApplication(f.applicant, created.id, created.version),
-    ).rejects.toMatchObject({ code: 'unavailable' });
-    expect(await service.getMyApplication(f.applicant, created.id)).toMatchObject({
-      status: 'draft',
-      version: created.version,
-      content: draft,
-    });
-    const [counts] = await client.unsafe(
-      `SELECT
-      (SELECT count(*)::int FROM hotel_application_versions WHERE application_id = $1) AS versions,
-      (SELECT count(*)::int FROM hotel_bureau_cases WHERE application_id = $1) AS cases,
-      (SELECT count(*)::int FROM audit_events WHERE target_resource_id = $1 AND action = 'hotel.application.submitted') AS audits`,
-      [created.id],
-    );
-    expect(counts).toEqual({ versions: 0, cases: 0, audits: 0 });
-  });
-
-  it('uses arbitrary-depth server ancestors and fails closed on cycles', async () => {
-    const f = await seedFixture();
-    let child = f.route.administrativeUnitId;
-    for (let depth = 0; depth < 14; depth++) {
-      const parent = `hotel-test-ancestor-${randomUUID()}`;
-      await client.unsafe(
-        `INSERT INTO administrative_units (id, display_name, level, is_synthetic) VALUES ($1, 'Synthetic ancestor', 'regional', true)`,
-        [parent],
-      );
-      await client.unsafe(`UPDATE administrative_units SET parent_id = $2 WHERE id = $1`, [
-        child,
-        parent,
-      ]);
-      child = parent;
-    }
-    await client.unsafe(
-      `UPDATE grant_scopes SET administrative_unit_id = $2, include_descendants = true WHERE grant_id IN
-      (SELECT grant_row.id FROM access_grants grant_row JOIN memberships m ON m.id = grant_row.membership_id WHERE m.user_profile_id = $1)`,
-      [await profileId(f.reviewer), child],
-    );
-    const created = await service.createApplication(f.applicant, { content: content() });
-    const submitted = await service.submitApplication(f.applicant, created.id, created.version);
-    expect(submitted.location?.hierarchy).toHaveLength(15);
-    const caseId = await getCaseId(created.id);
-    expect((await service.listBureauCases(f.reviewer)).items.map((item) => item.caseId)).toContain(
-      caseId,
-    );
-    await expect(service.getBureauCase(f.reviewer, caseId)).resolves.toMatchObject({ caseId });
-    await expect(
-      service.decideBureauCase(f.reviewer, caseId, {
-        expectedVersion: submitted.version,
-        decision: 'approve',
-        reason: 'Synthetic descendant review',
-      }),
-    ).resolves.toMatchObject({ status: 'approved' });
-    await client.unsafe(`UPDATE administrative_units SET parent_id = $2 WHERE id = $1`, [
-      child,
-      f.route.administrativeUnitId,
-    ]);
-    expect(
-      (await service.listLocations(f.applicant)).items.some(
-        (item) => item.unitId === f.route.administrativeUnitId,
-      ),
-    ).toBe(false);
-    const second = await service.createApplication(f.applicant, { content: content() });
-    await expect(
-      service.submitApplication(f.applicant, second.id, second.version),
-    ).rejects.toMatchObject({ code: 'unavailable' });
-  });
-
-  it('freezes location and assignment across route deactivation and rejects stale detail after a new draft', async () => {
-    const f = await seedFixture();
-    const created = await service.createApplication(f.applicant, { content: content() });
-    const submitted = await service.submitApplication(f.applicant, created.id, created.version);
-    const caseId = await getCaseId(created.id);
-    await client.unsafe(
-      `UPDATE administrative_units SET display_name = 'Renamed synthetic unit' WHERE id = $1`,
-      [f.route.administrativeUnitId],
-    );
-    await client.unsafe(
-      `UPDATE hotel_locations SET enabled = false WHERE administrative_unit_id = $1`,
-      [f.route.administrativeUnitId],
-    );
-    await client.unsafe(
-      `UPDATE hotel_location_routes SET enabled = false WHERE location_unit_id = $1`,
-      [f.route.administrativeUnitId],
-    );
-    expect((await service.getMyApplication(f.applicant, created.id)).location).toEqual(
-      submitted.location,
-    );
-    expect((await service.listBureauCases(f.reviewer)).items.map((item) => item.caseId)).toContain(
-      caseId,
-    );
-    expect((await service.getBureauCase(f.reviewer, caseId)).location).toEqual(submitted.location);
-    const approved = await service.decideBureauCase(f.reviewer, caseId, {
-      expectedVersion: submitted.version,
-      decision: 'approve',
-      reason: 'Saved assignment',
-    });
-    expect(
-      (await service.listAdmissionQueue(f.administrator)).items.map((item) => item.id),
-    ).toContain(created.id);
-    await service.updateDraft(f.applicant, created.id, approved.version, {
-      ...content(),
-      applicantNotes: 'Private newer draft',
-    });
-    await expect(service.getBureauCase(f.reviewer, caseId)).rejects.toMatchObject({
-      code: 'not_found',
-    });
-    expect(
-      (await service.listAdmissionQueue(f.administrator)).items.map((item) => item.id),
-    ).not.toContain(created.id);
-  });
-
-  it('preserves location-less legacy case history but fails closed without a version route binding', async () => {
-    const f = await seedFixture();
-    const legacy = { claimedHotelName: 'Legacy synthetic', applicantNotes: 'Legacy version' };
-    const created = await service.createApplication(f.applicant, { content: legacy });
-    const [version] = await client.unsafe(
-      `INSERT INTO hotel_application_versions
-      (application_id, version_number, content, submitted_by_profile_id) VALUES ($1, 1, $2::jsonb, $3) RETURNING id`,
-      [created.id, JSON.stringify(legacy), f.applicantProfileId],
-    );
-    await client.unsafe(
-      `INSERT INTO hotel_bureau_cases (application_id, application_version_id, bureau_organization_id, scope_unit_id) VALUES ($1, $2, $3, $4)`,
-      [created.id, version!.id, f.route.organizationId, f.route.administrativeUnitId],
-    );
-    await client.unsafe(
-      `UPDATE hotel_applications SET status = 'submitted', current_submitted_version_id = $2, current_version_number = 1 WHERE id = $1`,
-      [created.id, version!.id],
-    );
-    await client.unsafe(`DELETE FROM hotel_location_routes WHERE location_unit_id = $1`, [
-      f.route.administrativeUnitId,
-    ]);
-    const caseId = await getCaseId(created.id);
-    expect((await service.listBureauCases(f.reviewer)).items).not.toContainEqual(
-      expect.objectContaining({ caseId }),
-    );
-    await expect(service.getBureauCase(f.reviewer, caseId)).rejects.toMatchObject({
-      code: 'not_found',
-    });
-    await expect(
-      service.decideBureauCase(f.reviewer, caseId, {
-        expectedVersion: created.version,
-        decision: 'approve',
-        reason: 'Unbound legacy case must remain read-only.',
-      }),
-    ).rejects.toMatchObject({ code: 'not_found' });
-    await expect(
-      service.decideAdmission(f.administrator, created.id, {
-        expectedVersion: created.version,
-        decision: 'admit',
-        reason: 'An unbound legacy case cannot authorize admission.',
-      }),
-    ).rejects.toMatchObject({ code: 'not_found' });
-    const [preserved] = await client.unsafe<
-      { bureau_organization_id: string; scope_unit_id: string }[]
-    >(`SELECT bureau_organization_id, scope_unit_id FROM hotel_bureau_cases WHERE id = $1`, [
-      caseId,
-    ]);
-    expect(preserved).toEqual({
-      bureau_organization_id: f.route.organizationId,
-      scope_unit_id: f.route.administrativeUnitId,
-    });
-  });
-
-  it('creates private profile-owned drafts without membership or provider grants', async () => {
-    const fixture = await seedFixture();
-    const response = await service.createApplication(fixture.applicant, { content: content() });
-    const [counts] = await client.unsafe<{ memberships: number; grants: number }[]>(
-      `SELECT
-         (SELECT count(*)::int FROM memberships WHERE user_profile_id = $1) AS memberships,
-         (SELECT count(*)::int FROM access_grants grant_row JOIN memberships membership ON membership.id = grant_row.membership_id WHERE membership.user_profile_id = $1) AS grants`,
-      [fixture.applicantProfileId],
-    );
-
-    expect(response).toMatchObject({
+  it('keeps applicant drafts private without membership, grants or workspace admission', async () => {
+    const f = await fixture();
+    const draft = await service.createApplication(f.applicant, { content: content() });
+    expect(draft).toMatchObject({
       status: 'draft',
       admissionStatus: 'not_eligible',
       workspaceAccess: 'not_admitted',
     });
+    const [counts] = await client.unsafe(
+      `SELECT (SELECT count(*)::int FROM memberships WHERE user_profile_id = $1) AS memberships,
+       (SELECT count(*)::int FROM access_grants g JOIN memberships m ON m.id = g.membership_id WHERE m.user_profile_id = $1) AS grants`,
+      [f.applicantProfileId],
+    );
     expect(counts).toEqual({ memberships: 0, grants: 0 });
-    await expect(service.getMyApplication(fixture.other, response.id)).rejects.toMatchObject({
+    await expect(service.getMyApplication(f.other, draft.id)).rejects.toMatchObject({
       code: 'not_found',
     });
     await expect(
-      service.getProviderWorkspace(fixture.applicant, response.id),
+      service.updateDraft(f.other, draft.id, draft.version, content()),
     ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(service.submitApplication(f.other, draft.id, draft.version)).rejects.toMatchObject(
+      { code: 'not_found' },
+    );
+    await expect(service.getProviderWorkspace(f.applicant, draft.id)).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 
-  it('fails closed on an issuer-alias collision without creating a canonical profile or application', async () => {
-    await seedFixture();
+  it('fails closed on an issuer alias collision without transferring ownership or creating a canonical profile', async () => {
+    await fixture();
     const subjectId = `alias-collision-${randomUUID()}`;
+    const alias = 'http://keycloak:8080/realms/synthetic-hotel';
     await client.unsafe(
-      `INSERT INTO user_profiles (external_issuer, external_subject_id) VALUES ($1, $2)`,
-      ['http://keycloak:8080/realms/synthetic-hotel', subjectId],
+      'INSERT INTO user_profiles (external_issuer, external_subject_id) VALUES ($1, $2)',
+      [alias, subjectId],
     );
-    const aliasedActor: RegistryActor = {
-      issuer,
-      issuerAliases: ['http://keycloak:8080/realms/synthetic-hotel'],
-      subjectId,
-    };
-
     await expect(
-      service.createApplication(aliasedActor, { content: content() }),
-    ).rejects.toMatchObject({
-      code: 'conflict',
-      reason: expect.stringContaining('collides'),
-    });
-    const [canonical] = await client.unsafe<{ count: number }[]>(
-      `SELECT count(*)::int AS count FROM user_profiles WHERE external_issuer = $1 AND external_subject_id = $2`,
+      service.createApplication(
+        { issuer, issuerAliases: [alias], subjectId },
+        { content: content() },
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', reason: expect.stringContaining('collides') });
+    const [counts] = await client.unsafe(
+      `SELECT (SELECT count(*)::int FROM user_profiles WHERE external_issuer = $1 AND external_subject_id = $2) AS profiles,
+       (SELECT count(*)::int FROM hotel_applications a JOIN user_profiles p ON p.id = a.applicant_profile_id WHERE p.external_subject_id = $2) AS applications`,
       [issuer, subjectId],
     );
-    expect(canonical?.count).toBe(0);
+    expect(counts).toEqual({ profiles: 0, applications: 0 });
   });
 
-  it('maps an explicitly accepted alias to one canonical profile when no collision exists', async () => {
-    const fixture = await seedFixture();
-    const subjectId = `canonical-alias-${randomUUID()}`;
-    const canonicalActor: RegistryActor = { issuer, subjectId };
-    const aliasActor: RegistryActor = {
-      issuer,
+  it('uses one canonical profile for an explicitly accepted alias when no collision exists', async () => {
+    await fixture();
+    const actor = { issuer, subjectId: `canonical-alias-${randomUUID()}` };
+    const draft = await service.createApplication(actor, { content: content() });
+    const owned = await service.listMyApplications({
+      ...actor,
       issuerAliases: ['http://keycloak:8080/realms/synthetic-hotel'],
-      subjectId,
-    };
-    const created = await service.createApplication(canonicalActor, { content: content() });
-    const applications = await service.listMyApplications(aliasActor);
-    const [profiles] = await client.unsafe<{ count: number }[]>(
-      `SELECT count(*)::int AS count FROM user_profiles WHERE external_subject_id = $1`,
-      [subjectId],
-    );
-
-    expect(applications.items.map((item) => item.id)).toContain(created.id);
-    expect(profiles?.count).toBe(1);
-    expect(fixture.applicant.subjectId).not.toBe(subjectId);
-  });
-
-  it('assigns only the configured synthetic Bureau route and denies a different organization', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
-    );
-    const [caseRow] = await client.unsafe<
-      { bureau_organization_id: string; scope_unit_id: string }[]
-    >(
-      `SELECT bureau_organization_id, scope_unit_id FROM hotel_bureau_cases WHERE application_id = $1`,
-      [created.id],
-    );
-    expect(caseRow).toEqual({
-      bureau_organization_id: fixture.route.organizationId,
-      scope_unit_id: fixture.route.administrativeUnitId,
     });
-
-    const caseId = await getCaseId(created.id);
-    await expect(
-      service.decideBureauCase(fixture.otherOrgReviewer, caseId, {
-        expectedVersion: submitted.version,
-        decision: 'approve',
-        reason: 'Wrong organization must not review this case.',
-      }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
-    const [denial] = await client.unsafe<{ outcome: string; reason_code: string }[]>(
-      `SELECT outcome, reason_code FROM audit_events
-       WHERE actor_subject_id = $1 AND action = 'hotel.application.bureau.decide'
-         AND target_resource_id = $2 ORDER BY created_at DESC LIMIT 1`,
-      [fixture.otherOrgReviewer.subjectId, caseId],
-    );
-    expect(denial).toMatchObject({ outcome: 'denied', reason_code: 'missing-capability' });
-  });
-
-  it('does not combine Bureau decision capability and geographic scope across grants', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
-    );
-    const mixedReviewer = await makeActor('mixed-reviewer');
-    const [otherUnit] = await client.unsafe<{ id: string }[]>(
-      `INSERT INTO administrative_units (id, display_name, level, is_synthetic)
-       VALUES ($1, 'Synthetic wrong-scope unit', 'woreda', true) RETURNING id`,
-      [`hotel-test-other-unit-${randomUUID()}`],
-    );
-    const mixedReviewerProfileId = await profileId(mixedReviewer);
-    const [mixedReviewerMembership] = await client.unsafe<{ id: string }[]>(
-      `INSERT INTO memberships (user_profile_id, organization_id, label)
-       VALUES ($1, $2, 'Synthetic mixed-grant test role') RETURNING id`,
-      [mixedReviewerProfileId, fixture.route.organizationId],
-    );
-    if (!mixedReviewerMembership) throw new Error('Mixed-grant membership was not created.');
-    const [decisionGrant] = await client.unsafe<{ id: string }[]>(
-      `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
-       VALUES ($1, 'hotel:application:bureau:decide', $2, true, false) RETURNING id`,
-      [mixedReviewerMembership.id, fixture.route.organizationId],
-    );
-    const [readGrant] = await client.unsafe<{ id: string }[]>(
-      `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
-       VALUES ($1, 'hotel:application:bureau:read', $2, true, false) RETURNING id`,
-      [mixedReviewerMembership.id, fixture.route.organizationId],
-    );
-    if (!decisionGrant || !readGrant)
-      throw new Error('Mixed-grant capability rows were not created.');
-    await client.unsafe(
-      `INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants)
-       VALUES ($1, $2, false), ($3, $4, false)`,
-      [decisionGrant.id, otherUnit!.id, readGrant.id, fixture.route.administrativeUnitId],
-    );
-
-    await expect(
-      service.decideBureauCase(mixedReviewer, await getCaseId(created.id), {
-        expectedVersion: submitted.version,
-        decision: 'approve',
-        reason: 'Separate scope grant must not complete the decision permission.',
-      }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
-  });
-
-  it('requires an independent scoped reviewer and keeps each decision bound to one submitted version', async () => {
-    const fixture = await seedFixture({ applicantCanReview: true });
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
-    );
-    const caseId = await getCaseId(created.id);
-    await expect(
-      service.decideBureauCase(fixture.applicant, caseId, {
-        expectedVersion: submitted.version,
-        decision: 'approve',
-        reason: 'Self-review is not permitted.',
-      }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
-
-    const requested = await service.decideBureauCase(fixture.reviewer, caseId, {
-      expectedVersion: submitted.version,
-      decision: 'request_changes',
-      reason: 'A synthetic correction is requested.',
-    });
-    expect(requested.status).toBe('changes_requested');
-    const corrected = await service.updateDraft(fixture.applicant, created.id, requested.version, {
-      ...content(),
-      applicantNotes: 'Updated synthetic notes.',
-    });
-    const resubmitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      corrected.version,
-    );
-    expect(resubmitted.currentVersion).toBe(2);
-    expect(resubmitted.currentVersionId).not.toBe(submitted.currentVersionId);
-    await expect(
-      service.decideBureauCase(fixture.reviewer, caseId, {
-        expectedVersion: resubmitted.version,
-        decision: 'approve',
-        reason: 'Old version is stale.',
-      }),
-    ).rejects.toMatchObject({ code: 'conflict' });
-  });
-
-  it('serializes concurrent decisions so only one can decide the same current version', async () => {
-    const fixture = await seedFixture({ secondReviewer: true });
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
-    );
-    const caseId = await getCaseId(created.id);
-    const outcomes = await Promise.allSettled([
-      service.decideBureauCase(fixture.reviewer, caseId, {
-        expectedVersion: submitted.version,
-        decision: 'approve',
-        reason: 'Synthetic decision A.',
-      }),
-      service.decideBureauCase(fixture.secondReviewer!, caseId, {
-        expectedVersion: submitted.version,
-        decision: 'reject',
-        reason: 'Synthetic decision B.',
-      }),
-    ]);
-
-    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
-    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
-    const [count] = await client.unsafe<{ count: number }[]>(
-      `SELECT count(*)::int AS count FROM hotel_bureau_decisions WHERE case_id = $1`,
-      [caseId],
+    expect(owned.items.map((row) => row.id)).toContain(draft.id);
+    const [count] = await client.unsafe(
+      'SELECT count(*)::int AS count FROM user_profiles WHERE external_subject_id = $1',
+      [actor.subjectId],
     );
     expect(count?.count).toBe(1);
   });
 
-  it('keeps Administrator admission closed until current-version Bureau approval', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    await service.submitApplication(fixture.applicant, created.id, created.version);
-    const admissionQueue = await service.listAdmissionQueue(fixture.administrator);
-    expect(admissionQueue.items).not.toContainEqual(expect.objectContaining({ id: created.id }));
-    await expect(
-      service.decideAdmission(fixture.administrator, created.id, {
-        expectedVersion: 2,
-        decision: 'admit',
-        reason: 'No Bureau approval exists yet.',
-      }),
-    ).rejects.toMatchObject({ code: 'not_found' });
-    const [decisions] = await client.unsafe<{ count: number }[]>(
-      `SELECT count(*)::int AS count FROM hotel_admission_decisions WHERE application_id = $1`,
-      [created.id],
+  it('isolates office queues and makes inaccessible reads/decisions match nonexistent cases', async () => {
+    const f = await fixture();
+    const a = await submit(f.applicant);
+    const b = await submit(f.other, f.otherSelection);
+    const caseA = await caseId(a.id);
+    const caseB = await caseId(b.id);
+    expect((await service.listBureauCases(f.reviewer)).items.map((row) => row.caseId)).toEqual([
+      caseA,
+    ]);
+    expect((await service.listBureauCases(f.otherReviewer)).items.map((row) => row.caseId)).toEqual(
+      [caseB],
     );
-    expect(decisions?.count).toBe(0);
+    await expect(service.getBureauCase(f.reviewer, caseB)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    for (const id of [caseA, randomUUID()]) {
+      await expect(service.getBureauCase(f.otherReviewer, id)).rejects.toMatchObject({
+        code: 'not_found',
+      });
+      await expect(
+        service.decideBureauCase(f.otherReviewer, id, {
+          expectedVersion: a.version,
+          decision: 'approve',
+          reason: 'Wrong-office probe.',
+        }),
+      ).rejects.toMatchObject({ code: 'not_found' });
+    }
+    expect((await service.getBureauCase(f.reviewer, caseA)).assignment).toMatchObject({
+      organizationId: f.bureauOrganizationId,
+      routingReleaseId: f.routingReleaseId,
+      routingRuleId: f.ruleId,
+    });
   });
 
-  it('atomically creates private provider access only after admission and records no commercial capabilities', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
+  it('requires an independent reviewer and binds corrections to a new immutable version', async () => {
+    const f = await fixture({ applicantCanReview: true });
+    const first = await submit(f.applicant);
+    const oldCase = await caseId(first.id);
+    await expect(
+      service.decideBureauCase(f.applicant, oldCase, {
+        expectedVersion: first.version,
+        decision: 'approve',
+        reason: 'Self-review.',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    const changes = await service.decideBureauCase(f.reviewer, oldCase, {
+      expectedVersion: first.version,
+      decision: 'request_changes',
+      reason: 'Synthetic correction.',
+    });
+    const draft = await service.updateDraft(f.applicant, first.id, changes.version, {
+      ...content(),
+      applicantNotes: 'Corrected.',
+    });
+    const next = await service.submitApplication(f.applicant, first.id, draft.version);
+    expect(next.currentVersion).toBe(2);
+    expect(next.currentVersionId).not.toBe(first.currentVersionId);
+    await expect(
+      service.decideBureauCase(f.reviewer, oldCase, {
+        expectedVersion: next.version,
+        decision: 'approve',
+        reason: 'Old version.',
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(next.historicalBureauDecisions).toEqual([
+      expect.objectContaining({ decision: 'request_changes', applicationVersion: 1 }),
+    ]);
+  });
+
+  it('serializes concurrent decisions so exactly one can decide the current version', async () => {
+    const f = await fixture({ secondReviewer: true });
+    const submitted = await submit(f.applicant);
+    const id = await caseId(submitted.id);
+    const results = await Promise.allSettled([
+      service.decideBureauCase(f.reviewer, id, {
+        expectedVersion: submitted.version,
+        decision: 'approve',
+        reason: 'Synthetic A.',
+      }),
+      service.decideBureauCase(f.secondReviewer!, id, {
+        expectedVersion: submitted.version,
+        decision: 'reject',
+        reason: 'Synthetic B.',
+      }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const [count] = await client.unsafe(
+      'SELECT count(*)::int AS count FROM hotel_bureau_decisions WHERE case_id = $1',
+      [id],
     );
-    const approved = await service.decideBureauCase(fixture.reviewer, await getCaseId(created.id), {
-      expectedVersion: submitted.version,
-      decision: 'approve',
-      reason: 'Synthetic pilot Bureau review completed.',
+    expect(count?.count).toBe(1);
+  });
+
+  it('blocks Administrator admission without approval of the current submitted version', async () => {
+    const f = await fixture();
+    const submitted = await submit(f.applicant);
+    expect((await service.listAdmissionQueue(f.administrator)).items).not.toContainEqual(
+      expect.objectContaining({ id: submitted.id }),
+    );
+    await expect(
+      service.decideAdmission(f.administrator, submitted.id, {
+        expectedVersion: submitted.version,
+        decision: 'admit',
+        reason: 'Unapproved.',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    const [count] = await client.unsafe(
+      'SELECT count(*)::int AS count FROM hotel_admission_decisions WHERE application_id = $1',
+      [submitted.id],
+    );
+    expect(count?.count).toBe(0);
+  });
+
+  it('atomically grants private provider access on admission without commercial/public capabilities or private DTO leakage', async () => {
+    const f = await fixture();
+    const admitted = await admit(f);
+    expect(admitted).toMatchObject({
+      workspaceAccess: 'private_only',
+      admissionStatus: 'admitted',
+      admittedVersion: 1,
     });
-    expect(approved.admissionStatus).toBe('pending');
-    const admitted = await service.decideAdmission(fixture.administrator, created.id, {
-      expectedVersion: approved.version,
-      decision: 'admit',
-      reason: 'Synthetic pilot private workspace admission.',
-    });
-    expect(admitted.workspaceAccess).toBe('private_only');
-    expect(admitted.admissionStatus).toBe('admitted');
-    const [provider] = await client.unsafe<
-      { organization_type: string; level: string | null; administrative_unit_id: string | null }[]
-    >(
-      `SELECT organization.organization_type, organization.level, organization.administrative_unit_id
-       FROM hotel_applications application JOIN organizations organization
-         ON organization.id = application.provider_organization_id WHERE application.id = $1`,
-      [created.id],
+    const [provider] = await client.unsafe(
+      `SELECT o.organization_type, o.level, o.administrative_unit_id FROM hotel_applications a
+       JOIN organizations o ON o.id = a.provider_organization_id WHERE a.id = $1`,
+      [admitted.id],
     );
     expect(provider).toEqual({
       organization_type: 'provider',
       level: null,
       administrative_unit_id: null,
     });
-    const grants = await client.unsafe<{ capability: string }[]>(
-      `SELECT grant_row.capability FROM hotel_applications application
-       JOIN memberships membership ON membership.organization_id = application.provider_organization_id
-       JOIN access_grants grant_row ON grant_row.membership_id = membership.id
-       WHERE application.id = $1 ORDER BY grant_row.capability`,
-      [created.id],
+    const grants = await client.unsafe(
+      `SELECT g.capability FROM hotel_applications a JOIN memberships m ON m.organization_id = a.provider_organization_id
+       JOIN access_grants g ON g.membership_id = m.id WHERE a.id = $1 ORDER BY g.capability`,
+      [admitted.id],
     );
-    expect(grants.map((grant) => grant.capability)).toEqual([
+    expect(grants.map((row) => row.capability)).toEqual([
       'hotel:workspace:edit',
       'hotel:workspace:read',
     ]);
-    expect(await service.getProviderWorkspace(fixture.applicant, created.id)).toMatchObject({
+    expect(await service.getProviderWorkspace(f.applicant, admitted.id)).toMatchObject({
       workspaceAccess: 'private_only',
     });
-    await expect(service.getProviderWorkspace(fixture.other, created.id)).rejects.toMatchObject({
+    await expect(service.getProviderWorkspace(f.other, admitted.id)).rejects.toMatchObject({
       code: 'not_found',
     });
-    expect(Object.keys(admitted)).not.toEqual(
-      expect.arrayContaining([
-        'providerOrganizationId',
-        'applicantProfileId',
-        'externalIssuer',
-        'externalSubjectId',
-      ]),
-    );
-    const audit = await client.unsafe<{ action: string }[]>(
-      `SELECT action FROM audit_events WHERE target_resource_id = $1 AND outcome = 'allowed' ORDER BY created_at`,
-      [created.id],
+    for (const key of [
+      'assignment',
+      'providerOrganizationId',
+      'applicantProfileId',
+      'externalIssuer',
+      'externalSubjectId',
+      'routingReleaseId',
+      'routingRuleId',
+    ])
+      expect(admitted).not.toHaveProperty(key);
+    const audit = await client.unsafe(
+      "SELECT action FROM audit_events WHERE target_resource_id = $1 AND outcome = 'allowed'",
+      [admitted.id],
     );
     expect(audit.map((row) => row.action)).toEqual(
       expect.arrayContaining([
@@ -734,50 +384,17 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
     );
   });
 
-  it('keeps owner workspace access after a different-location resubmission without carrying forward decisions', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
+  it('preserves private workspace after a different-location resubmission without carrying forward historical approval', async () => {
+    const f = await fixture();
+    const admitted = await admit(f);
+    const oldCase = await caseId(admitted.id);
+    const draft = await service.updateDraft(
+      f.applicant,
+      admitted.id,
+      admitted.version,
+      content(f.otherSelection),
     );
-    const approved = await service.decideBureauCase(fixture.reviewer, await getCaseId(created.id), {
-      expectedVersion: submitted.version,
-      decision: 'approve',
-      reason: 'First synthetic version approved.',
-    });
-    const admitted = await service.decideAdmission(fixture.administrator, created.id, {
-      expectedVersion: approved.version,
-      decision: 'admit',
-      reason: 'Private pilot admission.',
-    });
-    const oldCaseId = await getCaseId(created.id);
-    const nextLocationId = `hotel-test-next-unit-${randomUUID()}`;
-    await client.unsafe(
-      `INSERT INTO administrative_units (id, display_name, level, parent_id, is_synthetic)
-       VALUES ($1, 'Synthetic alternate hotel location', 'woreda', NULL, true)`,
-      [nextLocationId],
-    );
-    await client.unsafe(`INSERT INTO hotel_locations (administrative_unit_id) VALUES ($1)`, [
-      nextLocationId,
-    ]);
-    await client.unsafe(
-      `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
-      [nextLocationId, fixture.otherBureauOrganizationId],
-    );
-    await grantInExistingMembership(
-      fixture.otherOrgReviewer,
-      fixture.otherBureauOrganizationId,
-      nextLocationId,
-      ['hotel:application:bureau:read', 'hotel:application:bureau:decide'],
-    );
-    const draft = await service.updateDraft(fixture.applicant, created.id, admitted.version, {
-      ...content(nextLocationId),
-      applicantNotes: 'Updated after private admission.',
-    });
-    const next = await service.submitApplication(fixture.applicant, created.id, draft.version);
-
+    const next = await service.submitApplication(f.applicant, admitted.id, draft.version);
     expect(next).toMatchObject({
       status: 'submitted',
       admissionStatus: 'admitted',
@@ -786,7 +403,7 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
       admittedVersion: 1,
       bureauDecision: null,
       admissionDecision: null,
-      location: expect.objectContaining({ id: nextLocationId }),
+      location: f.otherSelection,
       historicalBureauDecisions: [
         expect.objectContaining({ decision: 'approve', applicationVersion: 1 }),
       ],
@@ -794,341 +411,261 @@ suite('synthetic hotel onboarding PostgreSQL integration', () => {
         expect.objectContaining({ decision: 'admit', applicationVersion: 1 }),
       ],
     });
-    const workspace = await service.getProviderWorkspace(fixture.applicant, created.id);
-    expect(workspace).toMatchObject({
-      status: 'submitted',
-      workspaceAccess: 'private_only',
+    expect(await service.getProviderWorkspace(f.applicant, admitted.id)).toMatchObject({
       currentVersion: 2,
       admittedVersion: 1,
-      location: expect.objectContaining({ id: nextLocationId }),
+      workspaceAccess: 'private_only',
+      location: f.otherSelection,
     });
-    expect(workspace?.historicalBureauDecisions[0]?.applicationVersion).toBe(1);
-    expect(workspace?.historicalAdmissionDecisions[0]?.applicationVersion).toBe(1);
-    await expect(
-      service.getProviderWorkspace(fixture.otherOrgReviewer, created.id),
-    ).rejects.toMatchObject({ code: 'not_found' });
-
-    const newCaseId = await getCaseId(created.id);
-    expect((await service.listBureauCases(fixture.reviewer)).items).not.toContainEqual(
-      expect.objectContaining({ caseId: newCaseId }),
+    const newCase = await caseId(admitted.id);
+    expect((await service.listBureauCases(f.reviewer)).items).not.toContainEqual(
+      expect.objectContaining({ caseId: newCase }),
     );
-    const newCase = await service.getBureauCase(fixture.otherOrgReviewer, newCaseId);
-    expect(newCase).toMatchObject({
+    expect(await service.getBureauCase(f.otherReviewer, newCase)).toMatchObject({
       currentVersion: 2,
-      location: expect.objectContaining({ id: nextLocationId }),
+      location: f.otherSelection,
       bureauDecision: null,
       historicalBureauDecisions: [],
       historicalAdmissionDecisions: [],
     });
-    expect((await service.listBureauCases(fixture.otherOrgReviewer)).items).toContainEqual(
-      expect.objectContaining({ caseId: newCaseId }),
-    );
     await expect(
-      service.decideBureauCase(fixture.reviewer, oldCaseId, {
+      service.decideBureauCase(f.reviewer, oldCase, {
         expectedVersion: next.version,
         decision: 'approve',
-        reason: 'A prior-office decision cannot act on the new version.',
+        reason: 'Stale case.',
       }),
     ).rejects.toMatchObject({ code: 'conflict' });
     await expect(
-      service.decideAdmission(fixture.administrator, created.id, {
+      service.decideAdmission(f.administrator, admitted.id, {
         expectedVersion: next.version,
         decision: 'admit',
-        reason: 'The new version has not received Bureau review.',
+        reason: 'Old approval cannot cover a new location.',
       }),
     ).rejects.toMatchObject({ code: 'not_found' });
-    expect((await service.listAdmissionQueue(fixture.administrator)).items).not.toContainEqual(
-      expect.objectContaining({ id: created.id }),
+    expect((await service.listAdmissionQueue(f.administrator)).items).not.toContainEqual(
+      expect.objectContaining({ id: admitted.id }),
     );
   });
 
-  it('rejects changes to a Bureau case version, organization, or scope after creation', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    await service.submitApplication(fixture.applicant, created.id, created.version);
-    const caseId = await getCaseId(created.id);
-    const nextScopeId = `hotel-test-reassignment-${randomUUID()}`;
+  it('requires the current active provider-edit grant after admission', async () => {
+    const f = await fixture();
+    const admitted = await admit(f);
     await client.unsafe(
-      `INSERT INTO administrative_units (id, display_name, level, parent_id, is_synthetic)
-       VALUES ($1, 'Synthetic reassignment target', 'woreda', NULL, true)`,
-      [nextScopeId],
+      `UPDATE access_grants SET active = false WHERE capability = 'hotel:workspace:edit' AND membership_id IN
+       (SELECT id FROM memberships WHERE organization_id = (SELECT provider_organization_id FROM hotel_applications WHERE id = $1))`,
+      [admitted.id],
     );
-    const [nextVersion] = await client.unsafe<{ id: string }[]>(
-      `INSERT INTO hotel_application_versions
-         (application_id, version_number, content, submitted_by_profile_id,
-          location_unit_id, location_snapshot, bureau_organization_id, scope_unit_id)
-       SELECT application_id, version_number + 1, content, submitted_by_profile_id,
-              location_unit_id, location_snapshot, bureau_organization_id, scope_unit_id
-       FROM hotel_application_versions WHERE id = (
-         SELECT application_version_id FROM hotel_bureau_cases WHERE id = $1
-       ) RETURNING id`,
-      [caseId],
-    );
-    if (!nextVersion) throw new Error('Synthetic next application version was not created.');
-
     await expect(
-      client.unsafe(`UPDATE hotel_bureau_cases SET application_version_id = $2 WHERE id = $1`, [
-        caseId,
-        nextVersion.id,
-      ]),
-    ).rejects.toThrow('hotel Bureau case assignment is immutable');
-
-    await expect(
-      client.unsafe(`UPDATE hotel_bureau_cases SET bureau_organization_id = $2 WHERE id = $1`, [
-        caseId,
-        fixture.otherBureauOrganizationId,
-      ]),
-    ).rejects.toThrow('hotel Bureau case assignment is immutable');
-    await expect(
-      client.unsafe(`UPDATE hotel_bureau_cases SET scope_unit_id = $2 WHERE id = $1`, [
-        caseId,
-        nextScopeId,
-      ]),
-    ).rejects.toThrow('hotel Bureau case assignment is immutable');
-  });
-
-  it('excludes case assignment mismatches from both office queues, reads, and decisions', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    await service.submitApplication(fixture.applicant, created.id, created.version);
-    const [originalCase] = await client.unsafe<{ id: string; application_version_id: string }[]>(
-      `SELECT id, application_version_id FROM hotel_bureau_cases WHERE application_id = $1`,
-      [created.id],
-    );
-    if (!originalCase) throw new Error('Expected submitted Bureau case.');
-    await client.unsafe(`DELETE FROM hotel_bureau_cases WHERE id = $1`, [originalCase.id]);
-    const [mismatched] = await client.unsafe<{ id: string }[]>(
-      `INSERT INTO hotel_bureau_cases
-         (application_id, application_version_id, bureau_organization_id, scope_unit_id, status)
-       VALUES ($1, $2, $3, $4, 'in_review') RETURNING id`,
-      [
-        created.id,
-        originalCase.application_version_id,
-        fixture.otherBureauOrganizationId,
-        fixture.route.administrativeUnitId,
-      ],
-    );
-    if (!mismatched) throw new Error('Mismatched synthetic case insert returned no row.');
-
-    for (const reviewer of [fixture.reviewer, fixture.otherOrgReviewer]) {
-      expect((await service.listBureauCases(reviewer)).items).not.toContainEqual(
-        expect.objectContaining({ caseId: mismatched.id }),
-      );
-      await expect(service.getBureauCase(reviewer, mismatched.id)).rejects.toMatchObject({
-        code: 'not_found',
-      });
-      await expect(
-        service.decideBureauCase(reviewer, mismatched.id, {
-          expectedVersion: 2,
-          decision: 'approve',
-          reason: 'Mismatched route binding must fail closed.',
-        }),
-      ).rejects.toMatchObject({ code: 'not_found' });
-    }
-    await expect(service.getBureauCase(fixture.reviewer, randomUUID())).rejects.toMatchObject({
-      code: 'not_found',
-    });
-  });
-
-  it('requires the active provider edit grant for changes after admission', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
-    );
-    const approved = await service.decideBureauCase(fixture.reviewer, await getCaseId(created.id), {
-      expectedVersion: submitted.version,
-      decision: 'approve',
-      reason: 'Synthetic approval before access test.',
-    });
-    const admitted = await service.decideAdmission(fixture.administrator, created.id, {
-      expectedVersion: approved.version,
-      decision: 'admit',
-      reason: 'Synthetic private admission.',
-    });
-    await client.unsafe(
-      `UPDATE access_grants SET active = false
-       WHERE capability = 'hotel:workspace:edit'
-         AND membership_id IN (SELECT id FROM memberships WHERE organization_id = (
-           SELECT provider_organization_id FROM hotel_applications WHERE id = $1
-         ))`,
-      [created.id],
-    );
-
-    await expect(
-      service.updateDraft(fixture.applicant, created.id, admitted.version, content()),
+      service.updateDraft(f.applicant, admitted.id, admitted.version, content()),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(await service.getMyApplication(fixture.applicant, created.id)).toMatchObject({
+    expect(await service.getMyApplication(f.applicant, admitted.id)).toMatchObject({
       status: 'approved',
       admissionStatus: 'admitted',
     });
   });
 
-  it('rolls back decision, organization, membership, grants and audit if admission provisioning fails', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
+  it('rolls back provider organization, membership, grants, decision and success audit on admission failure', async () => {
+    const f = await fixture();
+    const [before] = await client.unsafe<{ count: number }[]>(
+      "SELECT count(*)::int AS count FROM organizations WHERE organization_type = 'provider'",
     );
-    const approved = await service.decideBureauCase(fixture.reviewer, await getCaseId(created.id), {
+    if (!before) throw new Error('Provider baseline count was not returned.');
+    const submitted = await submit(f.applicant);
+    const approved = await service.decideBureauCase(f.reviewer, await caseId(submitted.id), {
       expectedVersion: submitted.version,
       decision: 'approve',
-      reason: 'Synthetic approval for rollback test.',
+      reason: 'Rollback preparation.',
     });
-    const [triggerName] = [`hotel_pilot_fail_membership_${randomUUID().replaceAll('-', '')}`];
-    const functionName = `${triggerName}_fn`;
+    const trigger = `hotel_pilot_fail_${randomUUID().replaceAll('-', '')}`;
+    const fn = `${trigger}_fn`;
     try {
-      await client.unsafe(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN IF NEW.organization_id LIKE 'hotel-provider-%' THEN RAISE EXCEPTION 'pilot rollback probe'; END IF; RETURN NEW; END $$`);
+      await client.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.user_profile_id = '${f.applicantProfileId}'::uuid THEN RAISE EXCEPTION 'pilot rollback probe'; END IF; RETURN NEW; END $$`);
       await client.unsafe(
-        `CREATE TRIGGER ${triggerName} BEFORE INSERT ON memberships FOR EACH ROW EXECUTE FUNCTION ${functionName}()`,
+        `CREATE TRIGGER ${trigger} BEFORE INSERT ON memberships FOR EACH ROW EXECUTE FUNCTION ${fn}()`,
       );
       await expect(
-        service.decideAdmission(fixture.administrator, created.id, {
+        service.decideAdmission(f.administrator, submitted.id, {
           expectedVersion: approved.version,
           decision: 'admit',
-          reason: 'Must roll back as one transaction.',
+          reason: 'Atomic rollback.',
         }),
       ).rejects.toThrow('pilot rollback probe');
     } finally {
-      await client.unsafe(`DROP TRIGGER IF EXISTS ${triggerName} ON memberships`);
-      await client.unsafe(`DROP FUNCTION IF EXISTS ${functionName}()`);
+      await client.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON memberships`);
+      await client.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
     }
-    const [state] = await client.unsafe<
-      { decision_count: number; provider_count: number; admission_audit_count: number }[]
-    >(
-      `SELECT
-         (SELECT count(*)::int FROM hotel_admission_decisions WHERE application_id = $1) AS decision_count,
-         (SELECT count(*)::int FROM organizations WHERE id LIKE 'hotel-provider-%' AND id IN (SELECT provider_organization_id FROM hotel_applications WHERE id = $1)) AS provider_count,
-         (SELECT count(*)::int FROM audit_events WHERE target_resource_id = $1 AND action = 'hotel.admission.admit') AS admission_audit_count`,
-      [created.id],
+    const [counts] = await client.unsafe(
+      `SELECT (SELECT count(*)::int FROM hotel_admission_decisions WHERE application_id = $1) AS decisions,
+       (SELECT count(*)::int FROM organizations WHERE organization_type = 'provider') AS organizations,
+       (SELECT count(*)::int FROM memberships WHERE user_profile_id = $2) AS memberships,
+       (SELECT count(*)::int FROM access_grants g JOIN memberships m ON m.id = g.membership_id WHERE m.user_profile_id = $2) AS grants,
+       (SELECT count(*)::int FROM audit_events WHERE target_resource_id = $1 AND action = 'hotel.admission.admit' AND outcome = 'allowed') AS audits`,
+      [submitted.id, f.applicantProfileId],
     );
-    expect(state).toEqual({ decision_count: 0, provider_count: 0, admission_audit_count: 0 });
+    expect(counts).toEqual({
+      decisions: 0,
+      organizations: before.count,
+      memberships: 0,
+      grants: 0,
+      audits: 0,
+    });
+    expect(await service.getMyApplication(f.applicant, submitted.id)).toMatchObject({
+      version: approved.version,
+      admissionStatus: 'pending',
+      workspaceAccess: 'not_admitted',
+    });
   });
 
-  it('refuses updates to immutable submitted content and decision history', async () => {
-    const fixture = await seedFixture();
-    const created = await service.createApplication(fixture.applicant, { content: content() });
-    const submitted = await service.submitApplication(
-      fixture.applicant,
-      created.id,
-      created.version,
-    );
-    const [version] = await client.unsafe<{ id: string }[]>(
-      `SELECT id FROM hotel_application_versions WHERE application_id = $1`,
-      [created.id],
-    );
-    if (!version) throw new Error('Submitted immutable version is missing.');
+  it('rejects mutation of submitted contents, version assignment, case binding and decision history', async () => {
+    const f = await fixture();
+    const submitted = await submit(f.applicant);
+    const id = await caseId(submitted.id);
+    for (const [column, value] of [
+      ['content', '{}'],
+      ['geography_release_id', 'forged-synthetic-release'],
+      ['submitted_location_snapshot', '{}'],
+    ])
+      await expect(
+        client.unsafe(`UPDATE hotel_application_versions SET ${column} = $2 WHERE id = $1`, [
+          submitted.currentVersionId!,
+          value!,
+        ]),
+      ).rejects.toThrow(/immutable/i);
+    for (const [column, value] of [
+      ['bureau_organization_id', f.otherBureauOrganizationId],
+      ['geography_release_id', 'forged-synthetic-release'],
+      ['scope_geography_unit_id', f.otherSelection.unitId],
+      ['routing_rule_id', randomUUID()],
+      ['application_version_id', randomUUID()],
+    ])
+      await expect(
+        client.unsafe(`UPDATE hotel_bureau_cases SET ${column} = $2 WHERE id = $1`, [id, value!]),
+      ).rejects.toThrow(/immutable/i);
+    await service.decideBureauCase(f.reviewer, id, {
+      expectedVersion: submitted.version,
+      decision: 'reject',
+      reason: 'Immutable decision.',
+    });
     await expect(
-      client.unsafe(`UPDATE hotel_application_versions SET content = '{}'::jsonb WHERE id = $1`, [
-        version.id,
-      ]),
-    ).rejects.toThrow('hotel application history is immutable');
-    await expect(
-      service.decideBureauCase(fixture.reviewer, await getCaseId(created.id), {
-        expectedVersion: submitted.version,
-        decision: 'reject',
-        reason: 'Synthetic rejection for immutable history test.',
-      }),
-    ).resolves.toMatchObject({ status: 'rejected' });
-    const [decision] = await client.unsafe<{ id: string }[]>(
-      `SELECT id FROM hotel_bureau_decisions WHERE application_version_id = $1`,
-      [version.id],
+      client.unsafe('DELETE FROM hotel_bureau_decisions WHERE case_id = $1', [id]),
+    ).rejects.toThrow(/immutable/i);
+    expect((await service.getMyApplication(f.applicant, submitted.id)).location).toEqual(
+      submitted.location,
     );
-    if (!decision) throw new Error('Bureau decision history is missing.');
-    await expect(
-      client.unsafe(`DELETE FROM hotel_bureau_decisions WHERE id = $1`, [decision.id]),
-    ).rejects.toThrow('hotel application history is immutable');
   });
 });
 
-async function seedFixture(
-  options: { applicantCanReview?: boolean; secondReviewer?: boolean } = {},
-) {
+async function fixture(options: { applicantCanReview?: boolean; secondReviewer?: boolean } = {}) {
   const suffix = randomUUID();
-  const route = {
-    organizationId: `hotel-test-bureau-${suffix}`,
-    administrativeUnitId: `hotel-test-unit-${suffix}`,
+  const administrativeUnitId = `hotel-org-scope-${suffix}`;
+  const bureauOrganizationId = `hotel-bureau-a-${suffix}`;
+  const otherBureauOrganizationId = `hotel-bureau-b-${suffix}`;
+  const administratorOrganizationId = `hotel-platform-${suffix}`;
+  const geographyReleaseId = `hotel-geography-${suffix}`;
+  const routingReleaseId = `hotel-routing-${suffix}`;
+  const selection = {
+    geographyReleaseId,
+    unitId: `hotel-location-a-${suffix}`,
+    unitRevisionId: randomUUID(),
   };
-  const otherBureauOrganizationId = `hotel-test-other-bureau-${suffix}`;
-  const administratorOrganizationId = `hotel-test-platform-${suffix}`;
-  issuer = 'https://identity.example.test/realms/synthetic-hotel';
+  const otherSelection = {
+    geographyReleaseId,
+    unitId: `hotel-location-b-${suffix}`,
+    unitRevisionId: randomUUID(),
+  };
+  const ruleId = randomUUID();
+  const otherRuleId = randomUUID();
   await client.unsafe(
-    `INSERT INTO administrative_units (id, display_name, level, parent_id, is_synthetic)
-     VALUES ($1, 'Synthetic hotel pilot test scope', 'woreda', NULL, true)`,
-    [route.administrativeUnitId],
+    "INSERT INTO administrative_units (id, display_name, level, is_synthetic) VALUES ($1, 'Synthetic organization scope', 'woreda', true)",
+    [administrativeUnitId],
   );
-  for (const org of [
-    {
-      id: route.organizationId,
-      name: 'Synthetic Bureau test organization',
-      type: 'administrative',
-      level: 'woreda',
-      unit: route.administrativeUnitId,
-    },
-    {
-      id: otherBureauOrganizationId,
-      name: 'Synthetic other Bureau test organization',
-      type: 'administrative',
-      level: 'woreda',
-      unit: route.administrativeUnitId,
-    },
-    {
-      id: administratorOrganizationId,
-      name: 'Synthetic platform test organization',
-      type: 'platform',
-      level: null,
-      unit: null,
-    },
-  ]) {
+  for (const id of [bureauOrganizationId, otherBureauOrganizationId, administratorOrganizationId]) {
+    const platform = id === administratorOrganizationId;
     await client.unsafe(
       `INSERT INTO organizations (id, display_name, organization_type, level, administrative_unit_id, is_synthetic)
-       VALUES ($1, $2, $3, $4, $5, true)`,
-      [org.id, org.name, org.type, org.level, org.unit],
+      VALUES ($1, 'Synthetic hotel test organization', $2, $3, $4, true)`,
+      [
+        id,
+        platform ? 'platform' : 'administrative',
+        platform ? null : 'woreda',
+        platform ? null : administrativeUnitId,
+      ],
     );
   }
-  selectedUnitId = route.administrativeUnitId;
-  await client.unsafe(`INSERT INTO hotel_locations (administrative_unit_id) VALUES ($1)`, [
-    selectedUnitId,
-  ]);
-  await client.unsafe(
-    `INSERT INTO hotel_location_routes (location_unit_id, bureau_organization_id) VALUES ($1, $2)`,
-    [selectedUnitId, route.organizationId],
+  await provisionSyntheticHotelReleasePair(
+    client,
+    {
+      geography: {
+        id: geographyReleaseId,
+        sourceName: 'Synthetic tests',
+        sourceEdition: 'test-v1',
+        sourceReference: 'urn:ethio-tour:synthetic-tests',
+        synthetic: true,
+        units: [selection, otherSelection].map((s) => ({
+          unitId: s.unitId,
+          revisionId: s.unitRevisionId,
+          unitType: 'demo-locality',
+          parentUnitId: null,
+          names: [
+            {
+              value: `Synthetic location ${s === selection ? 'A' : 'B'}`,
+              languageTag: 'en',
+              script: 'Latn',
+              kind: 'display' as const,
+            },
+          ],
+        })),
+      },
+      routing: {
+        id: routingReleaseId,
+        geographyReleaseId,
+        sourceName: 'Synthetic routing',
+        sourceEdition: 'test-v1',
+        provenance: 'Synthetic software assignment only.',
+        synthetic: true,
+        rules: [
+          {
+            id: ruleId,
+            matchUnitId: selection.unitId,
+            matchMode: 'exact',
+            organizationId: bureauOrganizationId,
+            scopeUnitId: selection.unitId,
+            enabled: true,
+          },
+          {
+            id: otherRuleId,
+            matchUnitId: otherSelection.unitId,
+            matchMode: 'exact',
+            organizationId: otherBureauOrganizationId,
+            scopeUnitId: otherSelection.unitId,
+            enabled: true,
+          },
+        ],
+      },
+    },
+    { NODE_ENV: 'test', REGISTRY_POLICY_MODE: 'demo' },
   );
+  selectedLocation = selection;
   const applicant = await makeActor('applicant');
   const other = await makeActor('other');
   const reviewer = await makeActor('reviewer');
-  const otherOrgReviewer = await makeActor('other-org-reviewer');
+  const otherReviewer = await makeActor('other-reviewer');
   const administrator = await makeActor('administrator');
   const secondReviewer = options.secondReviewer ? await makeActor('second-reviewer') : undefined;
-  const settings = {
-    enabled: true,
-    production: false,
-    administratorOrganizationId,
-  };
-  const localService = new HotelOnboardingService(
-    new PostgresHotelOnboardingStore(client),
-    settings,
-  );
-  if (options.applicantCanReview)
-    await grant(applicant, route.organizationId, route.administrativeUnitId, [
+  const settings = { enabled: true, production: false, administratorOrganizationId };
+  service = new HotelOnboardingService(new PostgresHotelOnboardingStore(client), settings);
+  for (const actor of [
+    reviewer,
+    ...(options.applicantCanReview ? [applicant] : []),
+    ...(secondReviewer ? [secondReviewer] : []),
+  ]) {
+    await grant(actor, bureauOrganizationId, selection, [
       'hotel:application:bureau:read',
       'hotel:application:bureau:decide',
     ]);
-  await grant(reviewer, route.organizationId, route.administrativeUnitId, [
-    'hotel:application:bureau:read',
-    'hotel:application:bureau:decide',
-  ]);
-  if (secondReviewer)
-    await grant(secondReviewer, route.organizationId, route.administrativeUnitId, [
-      'hotel:application:bureau:read',
-      'hotel:application:bureau:decide',
-    ]);
-  await grant(otherOrgReviewer, otherBureauOrganizationId, route.administrativeUnitId, [
+  }
+  await grant(otherReviewer, otherBureauOrganizationId, otherSelection, [
     'hotel:application:bureau:read',
     'hotel:application:bureau:decide',
   ]);
@@ -1136,114 +673,101 @@ async function seedFixture(
     'hotel:application:admin:read',
     'hotel:application:admin:decide',
   ]);
-  service = localService;
   return {
     applicant,
     applicantProfileId: await profileId(applicant),
     other,
     reviewer,
-    otherOrgReviewer,
-    secondReviewer,
+    otherReviewer,
     administrator,
-    route,
+    secondReviewer,
+    selection,
+    otherSelection,
+    bureauOrganizationId,
     otherBureauOrganizationId,
-    administratorOrganizationId,
+    routingReleaseId,
+    ruleId,
     settings,
   };
 }
 
 async function makeActor(label: string): Promise<RegistryActor> {
-  const subjectId = `${label}-${randomUUID()}`;
+  const actor = { issuer, subjectId: `${label}-${randomUUID()}` };
   await client.unsafe(
-    `INSERT INTO user_profiles (external_issuer, external_subject_id) VALUES ($1, $2)`,
-    [issuer, subjectId],
+    'INSERT INTO user_profiles (external_issuer, external_subject_id) VALUES ($1, $2)',
+    [actor.issuer, actor.subjectId],
   );
-  return { issuer, subjectId };
+  return actor;
 }
 
 async function profileId(actor: RegistryActor): Promise<string> {
   const [row] = await client.unsafe<{ id: string }[]>(
-    `SELECT id FROM user_profiles WHERE external_issuer = $1 AND external_subject_id = $2`,
+    'SELECT id FROM user_profiles WHERE external_issuer = $1 AND external_subject_id = $2',
     [actor.issuer, actor.subjectId],
   );
-  if (!row) throw new Error('Synthetic fixture profile was not created.');
+  if (!row) throw new Error('Synthetic test profile is missing.');
   return row.id;
 }
 
 async function grant(
   actor: RegistryActor,
   organizationId: string,
-  scopeUnitId: string | null,
+  scope: HotelLocationSelection | null,
   capabilities: string[],
-): Promise<void> {
-  const profile = await profileId(actor);
+) {
   const [membership] = await client.unsafe<{ id: string }[]>(
-    `INSERT INTO memberships (user_profile_id, organization_id, label) VALUES ($1, $2, 'Synthetic test role') RETURNING id`,
-    [profile, organizationId],
+    "INSERT INTO memberships (user_profile_id, organization_id, label) VALUES ($1, $2, 'Synthetic test role') RETURNING id",
+    [await profileId(actor), organizationId],
   );
-  if (!membership) throw new Error('Synthetic fixture membership insert returned no row.');
+  if (!membership) throw new Error('Synthetic test membership insert returned no row.');
   for (const capability of capabilities) {
-    const [grantRow] = await client.unsafe<{ id: string }[]>(
+    const [row] = await client.unsafe<{ id: string }[]>(
       `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
-       VALUES ($1, $2, $3, true, false) RETURNING id`,
+      VALUES ($1, $2, $3, true, false) RETURNING id`,
       [membership.id, capability, organizationId],
     );
-    if (scopeUnitId && grantRow) {
+    if (!row) throw new Error('Synthetic test grant insert returned no row.');
+    if (scope)
       await client.unsafe(
-        `INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants) VALUES ($1, $2, false)`,
-        [grantRow.id, scopeUnitId],
+        `INSERT INTO grant_scopes (grant_id, administrative_unit_id, hotel_geography_release_id, hotel_geography_unit_id, include_descendants)
+      VALUES ($1, NULL, $2, $3, false)`,
+        [row.id, scope.geographyReleaseId, scope.unitId],
       );
-    }
   }
 }
 
-async function grantInExistingMembership(
-  actor: RegistryActor,
-  organizationId: string,
-  scopeUnitId: string,
-  capabilities: string[],
-): Promise<void> {
-  const profile = await profileId(actor);
-  const [membership] = await client.unsafe<{ id: string }[]>(
-    `SELECT id FROM memberships WHERE user_profile_id = $1 AND organization_id = $2`,
-    [profile, organizationId],
-  );
-  if (!membership) throw new Error('Synthetic fixture membership was not found.');
-  for (const capability of capabilities) {
-    let [grantRow] = await client.unsafe<{ id: string }[]>(
-      `SELECT id FROM access_grants
-       WHERE membership_id = $1 AND capability = $2 AND organization_id = $3`,
-      [membership.id, capability, organizationId],
-    );
-    if (!grantRow) {
-      [grantRow] = await client.unsafe<{ id: string }[]>(
-        `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
-         VALUES ($1, $2, $3, true, false) RETURNING id`,
-        [membership.id, capability, organizationId],
-      );
-    }
-    if (!grantRow) throw new Error('Synthetic scoped grant insert returned no row.');
-    await client.unsafe(
-      `INSERT INTO grant_scopes (grant_id, administrative_unit_id, include_descendants)
-       VALUES ($1, $2, false)`,
-      [grantRow.id, scopeUnitId],
-    );
-  }
-}
-
-async function getCaseId(applicationId: string): Promise<string> {
+async function caseId(applicationId: string): Promise<string> {
   const [row] = await client.unsafe<{ id: string }[]>(
-    `SELECT id FROM hotel_bureau_cases WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    'SELECT id FROM hotel_bureau_cases WHERE application_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
     [applicationId],
   );
-  if (!row) throw new Error('Synthetic Bureau case fixture was not created.');
+  if (!row) throw new Error('Synthetic submitted case is missing.');
   return row.id;
 }
 
-function content(administrativeUnitId = selectedUnitId) {
+function content(locationSelection = selectedLocation) {
   return {
-    administrativeUnitId,
-    claimedHotelName: `Synthetic test lodging ${randomUUID().slice(0, 8)}`,
-    applicantNotes: 'Synthetic-only content.',
+    locationSelection,
+    claimedHotelName: `Synthetic test lodging ${randomUUID()}`,
+    applicantNotes: 'Synthetic-only test content.',
   };
+}
+
+async function submit(actor: RegistryActor, selection = selectedLocation) {
+  const draft = await service.createApplication(actor, { content: content(selection) });
+  return service.submitApplication(actor, draft.id, draft.version);
+}
+
+async function admit(f: Awaited<ReturnType<typeof fixture>>) {
+  const submitted = await submit(f.applicant);
+  const approved = await service.decideBureauCase(f.reviewer, await caseId(submitted.id), {
+    expectedVersion: submitted.version,
+    decision: 'approve',
+    reason: 'Synthetic pilot review.',
+  });
+  return service.decideAdmission(f.administrator, submitted.id, {
+    expectedVersion: approved.version,
+    decision: 'admit',
+    reason: 'Synthetic private workspace admission.',
+  });
 }
