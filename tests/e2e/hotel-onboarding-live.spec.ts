@@ -630,9 +630,27 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
       ),
     ).toBeVisible();
     await returningApplicant.page.goto('/hotels');
-    const returningCardB = returningApplicant.page.locator('article.application-card').filter({
-      has: returningApplicant.page.getByRole('heading', { name: hotelNameB, exact: true }),
-    });
+    await expect(
+      returningApplicant.page.getByRole('button', { name: /sign in with keycloak/i }).last(),
+    ).toBeVisible();
+    // A hard navigation intentionally clears in-memory tokens; use real PKCE again.
+    const reauthenticatedApplicant = await signInThroughKeycloak(
+      browser,
+      hotelE2eConfig.identities.applicant,
+      '/hotels',
+    );
+    actors.push(reauthenticatedApplicant);
+    await expectUiApiResponse(
+      reauthenticatedApplicant.apiResponses,
+      'GET',
+      'hotels/applications',
+      200,
+    );
+    const returningCardB = reauthenticatedApplicant.page
+      .locator('article.application-card')
+      .filter({
+        has: reauthenticatedApplicant.page.getByRole('heading', { name: hotelNameB, exact: true }),
+      });
     await expect(returningCardB).toContainText('admitted');
     await expect(returningCardB.getByLabel('Submitted location')).toContainText(hierarchyB);
     await returningCardB.getByRole('button', { name: 'View admitted workspace' }).click();
@@ -642,14 +660,17 @@ test('two-office isolation, applicant submissions, authorized Bureau reviews, Ad
         .getByLabel('Submitted location'),
     ).toContainText(hierarchyB);
     await returningCardB.getByRole('link', { name: 'Direct workspace link' }).click();
-    await expect(returningApplicant.page.getByLabel('Submitted location')).toContainText(
+    await expect(reauthenticatedApplicant.page.getByLabel('Submitted location')).toContainText(
       hierarchyB,
     );
     for (const [id, location] of [
       [created.id, submittedA.location],
       [createdB.id, submittedB.location],
     ] as const) {
-      const admittedRead = await authenticatedGet(returningApplicant, `hotels/workspace/${id}`);
+      const admittedRead = await authenticatedGet(
+        reauthenticatedApplicant,
+        `hotels/workspace/${id}`,
+      );
       await expectStatus(admittedRead, 200, 'Admitted location snapshot remains available');
       expect(((await admittedRead.json()) as { location: HotelLocation }).location).toEqual(
         location,
