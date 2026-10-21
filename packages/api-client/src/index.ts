@@ -11,7 +11,6 @@ import type {
   HotelApplicationResponse,
   HotelBureauCaseListResponse,
   HotelBureauCaseResponse,
-  HotelLocationDirectoryResponse,
   HotelLocationSearchQuery,
   HotelLocationSearchResponse,
   PrivateRegistryResourceResponse,
@@ -39,6 +38,7 @@ export class ApiClientError extends Error {
   public constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiClientError';
@@ -168,7 +168,7 @@ export function createHotelApplication(
 
 export function getHotelLocations(
   options: AuthenticatedApiRequestOptions,
-): Promise<HotelLocationDirectoryResponse> {
+): Promise<HotelLocationSearchResponse> {
   return apiRequest('hotels/locations', 'GET', options);
 }
 
@@ -295,7 +295,16 @@ async function apiRequest<T>(
     if (response.status === 401 && typeof window !== 'undefined') {
       window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
     }
-    throw new ApiClientError('The API request failed', response.status);
+    let code: string | undefined;
+    try {
+      const body: unknown = await response.json();
+      if (body && typeof body === 'object' && 'code' in body && typeof body.code === 'string') {
+        code = body.code;
+      }
+    } catch {
+      // Error responses need not contain JSON.
+    }
+    throw new ApiClientError('The API request failed', response.status, code);
   }
 
   return (await response.json()) as T;

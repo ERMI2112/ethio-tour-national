@@ -76,6 +76,33 @@ describe('API client', () => {
     });
   });
 
+  it('preserves a structured stale-directory error without exposing server error text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ code: 'LOCATION_RELEASE_STALE', message: 'Server-only detail' }),
+            { status: 409 },
+          ),
+        ),
+    );
+    await expect(
+      searchHotelLocations(
+        {},
+        {
+          apiBaseUrl: 'http://api:4000/api',
+          accessToken: 'synthetic-token',
+        },
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'LOCATION_RELEASE_STALE',
+      message: 'The API request failed',
+    });
+  });
+
   it('prefers the explicit public API URL for browser requests over the internal API URL', async () => {
     vi.stubGlobal('window', new EventTarget());
     vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://localhost:55473/api');

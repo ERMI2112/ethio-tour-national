@@ -132,6 +132,12 @@ export interface HotelLocationSearchQuery {
   cursor?: string;
 }
 
+export type HotelLocationErrorCode =
+  | 'INVALID_QUERY'
+  | 'LOCATION_RELEASE_STALE'
+  | 'HOTEL_ROUTING_UNAVAILABLE'
+  | 'LOCATION_DIRECTORY_UNAVAILABLE';
+
 export interface HotelLocationDirectoryRelease {
   id: string;
   sourceEdition: string;

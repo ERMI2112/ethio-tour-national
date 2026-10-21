@@ -91,7 +91,8 @@ hierarchy is inferred for authorization.
 
 ## Errors and stale state
 
-- `400 INVALID_QUERY`: malformed, oversized, or unsupported search parameter.
+- `400 INVALID_QUERY`: malformed, oversized, or mismatched search cursor. HTTP
+  query/body validation also returns `400` for unsupported fields or invalid DTOs.
 - `401`: no valid authenticated session.
 - `409 LOCATION_RELEASE_STALE`: cursor or submitted selection references a
   release/unit revision that is no longer active for new submissions. Search
@@ -101,7 +102,13 @@ hierarchy is inferred for authorization.
 - `503 LOCATION_DIRECTORY_UNAVAILABLE`: no single valid active geography release.
 
 The exact error envelope follows the existing hotel onboarding exception
-filter. These codes do not expose private routing details.
+filter with an optional `code`: `{ "statusCode": 409, "message": "...", "code":
+"LOCATION_RELEASE_STALE" }`. The typed client preserves status and code without
+copying server error text. These codes do not expose private routing details.
+
+`getHotelLocations(options)` remains a first-page convenience alias returning
+the same `HotelLocationSearchResponse`; all callers deploy with this coordinated
+contract update. Legacy `HotelLocation` describes historical snapshots only.
 
 ## Authorized case projection
 
