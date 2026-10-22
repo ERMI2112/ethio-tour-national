@@ -165,7 +165,17 @@ export async function provisionSyntheticHotelReviewScope(
         'An active synthetic Bureau identity/membership binding is required.',
       );
     const [scopeUnit] = await transaction.unsafe<{ unit_id: string }[]>(
-      `SELECT revision.unit_id FROM hotel_geography_unit_revisions revision
+      `WITH RECURSIVE requested_scope_ancestors (id, unit_id, parent_revision_id) AS (
+         SELECT revision.id, revision.unit_id, revision.parent_revision_id
+         FROM hotel_geography_unit_revisions revision
+         WHERE revision.geography_release_id = $1 AND revision.unit_id = $2
+         UNION
+         SELECT parent.id, parent.unit_id, parent.parent_revision_id
+         FROM hotel_geography_unit_revisions parent
+         JOIN requested_scope_ancestors child ON child.parent_revision_id = parent.id
+         WHERE parent.geography_release_id = $1
+       )
+       SELECT revision.unit_id FROM hotel_geography_unit_revisions revision
        JOIN hotel_geography_releases geography ON geography.id = revision.geography_release_id
        WHERE geography.id = $1 AND revision.unit_id = $2 AND geography.synthetic = true
          AND geography.validation_status = 'valid' AND geography.activated_at IS NOT NULL
@@ -176,6 +186,9 @@ export async function provisionSyntheticHotelReviewScope(
            WHERE routing.geography_release_id = geography.id AND routing.synthetic = true
              AND routing.activated_at IS NOT NULL AND rule.enabled = true
              AND rule.bureau_organization_id = $3
+             AND rule.scope_unit_id IN (
+               SELECT ancestor.unit_id FROM requested_scope_ancestors ancestor
+             )
          )`,
       [input.geographyReleaseId, input.scopeUnitId, input.organizationId],
     );

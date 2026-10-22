@@ -551,7 +551,7 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     });
     const fresh = await f.service.submitApplication(f.applicant, freshDraft.id, freshDraft.version);
     const reviewer = await actor('explicit-B-only-officer');
-    const input = await scopeInput(reviewer, f.officeB, b.geography.id, f.rootB.unitId);
+    const input = await scopeInput(reviewer, f.officeB, b.geography.id, f.leafB.unitId);
     const before = await scopeCounts(input.membershipId);
     const duplicate = await Promise.all([
       provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
@@ -597,13 +597,44 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     expect(scopes.every((scope) => scope.hotel_geography_release_id === b.geography.id)).toBe(true);
   });
 
+  it('allows an explicitly narrower scope within the configured Bureau route', async () => {
+    const f = await fixture((pair) => {
+      const rule = pair.routing.rules[0]!;
+      let routeScope = pair.geography.units.find((unit) => unit.unitId === rule.matchUnitId);
+      while (routeScope?.parentUnitId) {
+        routeScope = pair.geography.units.find((unit) => unit.unitId === routeScope!.parentUnitId);
+      }
+      if (!routeScope) throw new Error('Synthetic route scope fixture is missing.');
+      rule.scopeUnitId = routeScope.unitId;
+    });
+    const reviewer = await actor('contained-route-scope-officer');
+    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.branch.unitId);
+    const provisioned = await provisionSyntheticHotelReviewScope(
+      client,
+      input,
+      reviewScopeEnvironment,
+    );
+
+    expect(provisioned.created).toBe(true);
+    const [scope] = await client.unsafe(
+      `SELECT hotel_geography_release_id, hotel_geography_unit_id, include_descendants
+       FROM grant_scopes WHERE id = $1`,
+      [provisioned.scopeId],
+    );
+    expect(scope).toEqual({
+      hotel_geography_release_id: f.pair.geography.id,
+      hotel_geography_unit_id: f.branch.unitId,
+      include_descendants: true,
+    });
+  });
+
   it.each(['profile', 'membership', 'grant'] as const)(
     'never reactivates a revoked %s during explicit provisioning',
     async (entity) => {
       const f = await fixture();
       const submitted = await submit(f, f.leafA);
       const reviewer = await actor('revoked-explicit-officer');
-      const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.rootA.unitId);
+      const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.leafA.unitId);
       const result = await provisionSyntheticHotelReviewScope(
         client,
         input,
@@ -649,6 +680,8 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     'unpublished-release',
     'invalid-release',
     'missing-unit',
+    'scope-outside-route',
+    'different-release-scope',
     'non-demo-grant',
     'descendant-conflict',
   ] as const)(
@@ -665,10 +698,17 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
           [organization, f.officeA],
         );
       }
-      const input = await scopeInput(reviewer, organization, f.pair.geography.id, f.rootA.unitId);
+      const input = await scopeInput(reviewer, organization, f.pair.geography.id, f.leafA.unitId);
       if (failure === 'identity') input.subjectId = f.reviewer.subjectId;
       if (failure === 'organization') input.organizationId = f.officeB;
       if (failure === 'missing-unit') input.scopeUnitId = `missing-${randomUUID()}`;
+      if (failure === 'scope-outside-route') input.scopeUnitId = f.rootB.unitId;
+      if (failure === 'different-release-scope') {
+        const next = nextPair(f);
+        await provisionSyntheticHotelReleasePair(client, next, environment);
+        input.geographyReleaseId = next.geography.id;
+        input.scopeUnitId = f.leafA.unitId;
+      }
       if (failure === 'unpublished-release' || failure === 'invalid-release') {
         input.geographyReleaseId = `unpublished-scope-${randomUUID()}`;
         await client.unsafe(
@@ -696,14 +736,19 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
   );
 
   it('keeps independently provisioned read and decision scopes within their own complete grants', async () => {
-    const f = await fixture();
+    const f = await fixture((pair) => {
+      const rule = pair.routing.rules[0]!;
+      const matched = pair.geography.units.find((unit) => unit.unitId === rule.matchUnitId);
+      if (!matched?.parentUnitId) throw new Error('Synthetic route parent fixture is missing.');
+      rule.scopeUnitId = matched.parentUnitId;
+    });
     const submitted = await submit(f, f.leafA);
     const reviewer = await actor('explicit-mixed-grant-officer');
-    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.rootA.unitId);
+    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.branch.unitId);
     await provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment);
     await provisionSyntheticHotelReviewScope(
       client,
-      { ...input, capability: decideCapability, scopeUnitId: f.rootB.unitId },
+      { ...input, capability: decideCapability, scopeUnitId: f.leafA.unitId },
       reviewScopeEnvironment,
     );
     expect(await f.service.getBureauCase(reviewer, await caseId(submitted.id))).toMatchObject({
@@ -721,7 +766,7 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
   it('rolls back a newly provisioned grant and scope if its audit event is rejected', async () => {
     const f = await fixture();
     const reviewer = await actor('audit-rejected-officer');
-    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.rootA.unitId);
+    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.leafA.unitId);
     const before = await scopeCounts(input.membershipId);
     const trigger = `reject_scope_audit_${randomUUID().replace(/-/g, '')}`;
     await client.unsafe(`CREATE FUNCTION ${trigger}() RETURNS trigger LANGUAGE plpgsql AS $$
