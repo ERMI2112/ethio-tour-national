@@ -101,6 +101,15 @@ describe('workspace portal — signed in', () => {
     expect(identity.textContent).toContain('Bureau Officer A');
   });
 
+  it('uses a generic greeting when the session display name is only the subject key', () => {
+    const subject = 'opaque-keycloak-subject';
+    renderWithAuth(createTestSession({ actorKey: subject, displayName: subject }));
+    const identity = screen.getByTestId('session-identity');
+    expect(identity.textContent).toBe('👤 Signed in');
+    expect(identity.title).toBe('Signed in');
+    expect(screen.queryByText(subject)).toBeNull();
+  });
+
   it('shows hotel workflow navigation links to existing routes', () => {
     renderWithAuth(createTestSession());
     const applicantLink = screen.getByText('Applicant applications');

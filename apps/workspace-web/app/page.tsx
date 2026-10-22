@@ -8,6 +8,8 @@ import { getPublicUrl } from './portal-config';
 export default function WorkspaceHomePage() {
   const { session, isAuthenticated, error, signIn, signOut } = useAuth();
   const publicUrl = getPublicUrl();
+  const displayName =
+    session?.displayName && session.displayName !== session.actorKey ? session.displayName : null;
 
   return (
     <main>
@@ -42,10 +44,10 @@ export default function WorkspaceHomePage() {
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                   }}
-                  title={session?.displayName ?? 'Signed in'}
+                  title={displayName ?? 'Signed in'}
                   data-testid="session-identity"
                 >
-                  👤 {session?.displayName ?? 'Signed in'}
+                  👤 {displayName ?? 'Signed in'}
                 </span>
                 <button
                   type="button"

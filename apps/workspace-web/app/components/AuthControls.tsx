@@ -9,7 +9,10 @@ export function AuthControls() {
   const pilotSession = useHotelPilotSession();
 
   const isAuthenticated = auth?.isAuthenticated ?? pilotSession.isAuthenticated;
-  const displayName = auth?.session?.displayName ?? pilotSession.displayName;
+  const sessionDisplayName = auth?.session?.displayName ?? pilotSession.displayName;
+  const actorKey = auth?.session?.actorKey ?? pilotSession.actorKey;
+  const displayName =
+    sessionDisplayName && sessionDisplayName !== actorKey ? sessionDisplayName : undefined;
   const signIn = auth?.signIn ?? pilotSession.signIn;
   const signOut = auth?.signOut ?? pilotSession.signOut;
 

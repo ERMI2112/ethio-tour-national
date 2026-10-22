@@ -1,6 +1,6 @@
 # Homepage and Bureau Portal Integration
 
-Status: locally committed UI candidate; real-auth browser acceptance pending.
+Status: locally committed integrated UI candidate; real-auth browser acceptance pending.
 
 ## Provenance
 
@@ -15,9 +15,9 @@ Status: locally committed UI candidate; real-auth browser acceptance pending.
 - Contributions were applied with `git cherry-pick -x`, respectively as
   `c61443d6acc2e2aa7e42b108a461e0f130097efb` and
   `8fd028453c2a08a8077af96981bbb60f05ebb1cf`. Contributor worktrees remain intact.
-  This handoff accompanies the subsequent integration-fix commit. All application
-  checks below ran on the application tree committed alongside this document;
-  no application changes followed those successful checks.
+  The initial integration fixes were committed as `45c76ac89e0c91fbafa268243ec9d8e994fd9162`.
+  The URL-build and identity-display corrections documented below are the current
+  integration follow-up and were checked on this worktree before checkpointing.
 
 ## Bureau Behavior
 
@@ -43,32 +43,50 @@ test file. It required no shared component, session, API, or backend change.
   actual synthetic private hotel pilot and its limits.
 - Cross-app origin configuration rejects non-HTTP(S) destinations, credentials,
   paths, queries, and fragments, and normalizes trailing slashes before joining
-  existing private routes.
+  existing private routes. Development retains the documented localhost origins;
+  production requires each origin explicitly and fails rather than silently using
+  localhost when a value is missing. `.env.example` labels its localhost values
+  as local-only.
 - Workspace entry still uses the real AuthProvider and its sign-in/sign-out
   actions. Initiation errors remain in its alert without unhandled rejections.
   Tests cover identity replacement, API 401, sign-out, and expiry. Displayed links
-  do not confer authority; backend permission checks remain unchanged.
+  do not confer authority; backend permission checks remain unchanged. If the
+  identity provider supplies no display name and the session's `displayName` is
+  only the opaque subject key, entry and shared workspace identity controls show
+  “Signed in” instead.
+
+The shared web Dockerfile accepts both origins as build arguments, and Compose
+passes them through to both Next builds. A missing value stays empty and causes
+the production origin helper to fail. Local production builds must pass explicit
+values. This wiring was source-reviewed; Docker Compose and image builds were not
+run for this task.
 
 ## Executed Checks
 
-Node `22.14.0`, pnpm `12.5.1`. Commands below exited 0 on the final integrated
-application tree:
+Node `22.14.0`, pnpm `12.5.1`. These checks were executed on the current
+integration worktree after the URL and identity-display follow-up; all commands
+below exited 0:
 
-- `pnpm install --frozen-lockfile`: passed; no dependency or lockfile changes.
 - `pnpm --filter @ethio-tour/public-web --filter @ethio-tour/workspace-web test`:
-  public web **20 passed, 0 failed, 0 skipped**; workspace **94 passed, 0 failed,
+  public web **22 passed, 0 failed, 0 skipped**; workspace **100 passed, 0 failed,
   0 skipped**. These are service-free unit/component tests, not live API/browser
-  tests. The 114 executed tests are an actual combined-tree run, not a sum of
+  tests. The 122 executed tests are an actual combined-tree run, not a sum of
   contributor claims.
 - `pnpm --filter @ethio-tour/public-web --filter @ethio-tour/workspace-web lint`:
   passed.
 - `pnpm --filter @ethio-tour/public-web --filter @ethio-tour/workspace-web typecheck`:
-  passed after the production builds.
-- `pnpm --filter @ethio-tour/public-web... --filter @ethio-tour/workspace-web... build`:
+  passed.
+- PowerShell with process-only `NEXT_PUBLIC_WORKSPACE_URL=http://localhost:3001`
+  and `NEXT_PUBLIC_PUBLIC_URL=http://localhost:3000`, followed by
+  `pnpm --filter @ethio-tour/public-web... --filter @ethio-tour/workspace-web... build`:
   contracts, API client, public web, and workspace production builds passed.
   Next reported the existing non-fatal ESLint plugin warning.
-- Prettier check on all changed TypeScript, TSX, CSS and this handoff: passed.
+- Changed-file Prettier check: passed. The Dockerfile was checked by inspection
+  because Prettier has no Dockerfile parser.
 - `git diff --check`: passed.
+
+`pnpm install --frozen-lockfile` passed before this follow-up on the prior
+integration source; this patch changes no dependencies or lockfile.
 
 Separately, Codex executed the Bureau contribution's workspace suite: **73 passed,
 0 failed, 0 skipped**, with workspace lint, typecheck, scoped formatting, dependency
@@ -84,13 +102,9 @@ the fixes. These earlier counts are not added to the final combined-tree totals.
 - Semantic controls, accessible names, hidden-card behavior and keyboard-related
   events were checked through DOM tests. Mobile visual layout, actual browser
   focus behavior, contrast and full accessibility compliance were not verified.
-- The new `NEXT_PUBLIC_WORKSPACE_URL` and `NEXT_PUBLIC_PUBLIC_URL` are build-time
-  origins documented in `.env.example`, defaulting to local ports 3001 and 3000.
-  Custom values must be supplied to each Next build. The existing Dockerfile and
-  Compose build configuration do not yet forward these two variables; changing
-  ports or deployment origins through Compose needs a separately coordinated
-  infrastructure patch and verification. This task did not modify that shared
-  configuration or verify application images.
+- Cross-app origins are embedded by Next at build time. Compose/Dockerfile
+  forwarding is implemented, but image build behavior and deployed browser link
+  targets have not been exercised because Docker and services were out of scope.
 - No PostgreSQL tests were rerun for this UI-only integration. The existing
   81/81 PostgreSQL evidence remains attached to `f64e5ab5a21c8017df208e5b432fa1e685bbd7fe`;
   its documentation checkpoint is the base `e73ce2d`. It is not new browser or
@@ -114,9 +128,13 @@ apps/public-web/vitest.config.ts
 apps/workspace-web/app/bureau/hotel-cases/bureau-queue.module.css
 apps/workspace-web/app/bureau/hotel-cases/bureau-queue.test.tsx
 apps/workspace-web/app/bureau/hotel-cases/screen.tsx
+apps/workspace-web/app/components/AuthControls.test.tsx
+apps/workspace-web/app/components/AuthControls.tsx
 apps/workspace-web/app/page.test.tsx
 apps/workspace-web/app/page.tsx
 apps/workspace-web/app/portal-config.test.ts
 apps/workspace-web/app/portal-config.ts
 docs/handoffs/2026-10-22-homepage-bureau-portal.md
+docker-compose.yml
+infra/docker/Dockerfile.web
 ```
