@@ -174,11 +174,25 @@ The provisioner verifies the client's actual connection target against the
 guarded target before connecting, then verifies the effective database name.
 It requires an active exact identity/membership/organization binding, an
 activated valid synthetic geography containing the scope unit, and an activated
-compatible synthetic routing release with an enabled rule for that office.
-An activated historical release can be explicitly authorized; it need not be
-the current pair. This does not alter any case assignment or imply official
-jurisdiction. Synthetic identity provenance comes from the isolated setup;
-profiles and memberships do not acquire an invented verification flag.
+compatible synthetic routing release with an enabled rule for that office. The
+requested grant scope must both stay within that route's configured coverage
+and be able to authorize at least one case scope routed to that office in the
+same geography release. This follows the existing authorization rule: an exact
+case-scope match is allowed, or an ancestor grant scope is allowed when
+`includeDescendants` is true. It prevents successful provisioning of a scope
+that is contained by a route but cannot authorize any case produced by it.
+
+Provisioning against an activated historical routing release is intentional:
+cases retain their original release, rule, office and scope, so an operator may
+need to provision explicit access for those historical cases. The provisioner
+does not require the release to be the current active pair and does not switch
+the active pair, change existing assignments, or change future routing. Whether
+new grants should remain provisionable for superseded releases indefinitely, or
+be limited to a documented historical-queue need, remains an operational policy
+decision; current behavior permits the explicit historical-release request.
+This does not imply official jurisdiction. Synthetic identity provenance comes
+from the isolated setup; profiles and memberships do not acquire an invented
+verification flag.
 
 The transaction locks the membership and existing grant, adds only the requested
 release scope, and records `hotel.directory.review_scope.provisioned` under the

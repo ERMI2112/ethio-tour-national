@@ -754,9 +754,29 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
         input.includeDescendants = false;
       }
       const before = await scopeCounts(input.membershipId);
+      const expectedErrors: Record<typeof failure, string> = {
+        identity: 'An active synthetic Bureau identity/membership binding is required.',
+        organization: 'An active synthetic Bureau identity/membership binding is required.',
+        'unconfigured-office':
+          'The review scope must fit configured Bureau coverage and authorize a routed case.',
+        'unpublished-release':
+          'The review scope must fit configured Bureau coverage and authorize a routed case.',
+        'invalid-release':
+          'The review scope must fit configured Bureau coverage and authorize a routed case.',
+        'missing-unit':
+          'The review scope must fit configured Bureau coverage and authorize a routed case.',
+        'scope-outside-route':
+          'The review scope must fit configured Bureau coverage and authorize a routed case.',
+        'different-release-scope':
+          'The review scope must fit configured Bureau coverage and authorize a routed case.',
+        'non-demo-grant':
+          'The existing hotel review grant is revoked or conflicts with demo-only authority.',
+        'descendant-conflict':
+          'The existing hotel review scope conflicts with the explicit request.',
+      };
       await expect(
         provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
-      ).rejects.toThrow(/binding|unavailable|conflicts/);
+      ).rejects.toMatchObject({ message: expectedErrors[failure] });
       expect(await scopeCounts(input.membershipId)).toEqual(before);
     },
   );
