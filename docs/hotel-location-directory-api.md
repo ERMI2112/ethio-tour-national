@@ -89,6 +89,12 @@ pre-directory snapshot, or `unselected` when no location is selected. Historical
 legacy locations are displayed from their saved snapshot only; no current
 hierarchy is inferred for authorization.
 
+Draft previews resolve names only from activated, valid synthetic geography
+releases. Unpublished, invalid, unknown or mismatched references all return
+`location: null` and `locationState: "stale"`; the saved content is retained.
+These responses do not confirm whether a hidden unit exists. Historical submitted
+locations remain owner-readable from their immutable submission snapshots.
+
 ## Errors and stale state
 
 - `400 INVALID_QUERY`: malformed, oversized, or mismatched search cursor. HTTP

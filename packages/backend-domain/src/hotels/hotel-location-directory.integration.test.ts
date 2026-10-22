@@ -260,12 +260,88 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
       status: 'draft',
       version: draft.version,
       locationState: 'stale',
+      location: draft.location,
+      content: draft.content,
     });
     await expect(
       f.service.submitApplication(f.applicant, draft.id, draft.version),
     ).rejects.toMatchObject({ code: 'conflict' });
     await expectNoSubmission(draft.id);
   });
+
+  it.each(['draft', 'valid', 'invalid', 'non-synthetic'] as const)(
+    'never previews unpublished or invalid geography through saved drafts: %s',
+    async (state) => {
+      const f = await fixture();
+      const hiddenRelease = `unpublished-${randomUUID()}`;
+      const hiddenUnit = `unpublished-unit-${randomUUID()}`;
+      const hiddenRevision = randomUUID();
+      const hiddenLabel = `Unpublished private label ${randomUUID()}`;
+      await client.unsafe(
+        `INSERT INTO hotel_geography_releases
+          (id, source_name, source_edition, source_reference, synthetic, validation_status)
+         VALUES ($1, 'Synthetic unpublished fixture', 'not-activated', 'urn:synthetic:hidden', $2, $3)`,
+        [hiddenRelease, state !== 'non-synthetic', state === 'non-synthetic' ? 'valid' : state],
+      );
+      await client.unsafe('INSERT INTO hotel_geography_units (id) VALUES ($1)', [hiddenUnit]);
+      await client.unsafe(
+        `INSERT INTO hotel_geography_unit_revisions (id, geography_release_id, unit_id, unit_type)
+         VALUES ($1, $2, $3, 'synthetic-unpublished-type')`,
+        [hiddenRevision, hiddenRelease, hiddenUnit],
+      );
+      await client.unsafe(
+        `INSERT INTO hotel_geography_names
+          (geography_release_id, unit_revision_id, value, normalized_value, language_tag, name_kind)
+         VALUES ($1, $2, $3, $4, 'en', 'display')`,
+        [hiddenRelease, hiddenRevision, hiddenLabel, hiddenLabel.toLowerCase()],
+      );
+      const draft = await f.service.createApplication(f.applicant, {
+        content: content(selection(f.pair, f.leafA)),
+      });
+      for (const reference of [
+        { geographyReleaseId: hiddenRelease, unitId: hiddenUnit, unitRevisionId: hiddenRevision },
+        {
+          geographyReleaseId: `missing-${randomUUID()}`,
+          unitId: hiddenUnit,
+          unitRevisionId: randomUUID(),
+        },
+      ]) {
+        const savedContent = contentWithName(draft.content.claimedHotelName, reference);
+        const current = await f.service.getMyApplication(f.applicant, draft.id);
+        const saved = await f.service.updateDraft(
+          f.applicant,
+          draft.id,
+          current.version,
+          savedContent,
+        );
+        const single = await f.service.getMyApplication(f.applicant, draft.id);
+        const listed = (await f.service.listMyApplications(f.applicant)).items.find(
+          (item) => item.id === draft.id,
+        );
+        for (const response of [saved, single, listed]) {
+          expect(response).toMatchObject({
+            content: savedContent,
+            location: null,
+            locationState: 'stale',
+          });
+          expect(JSON.stringify(response)).not.toContain(hiddenLabel);
+          expect(JSON.stringify(response)).not.toContain('synthetic-unpublished-type');
+        }
+        await expect(
+          f.service.submitApplication(f.applicant, draft.id, saved.version),
+        ).rejects.toMatchObject({
+          code: 'conflict',
+          errorCode: 'LOCATION_RELEASE_STALE',
+          reason:
+            'The location directory changed. Search again and confirm the location before submitting.',
+        });
+        await expectNoSubmission(draft.id);
+      }
+      expect((await f.service.listLocations(f.applicant, { query: hiddenLabel })).items).toEqual(
+        [],
+      );
+    },
+  );
 
   it.each(['no-selection', 'no-route', 'disabled-route', 'ambiguous-route'] as const)(
     'preserves a private draft with no version/case/success audit for %s',
@@ -322,6 +398,7 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     const forged = await f.service.createApplication(f.applicant, {
       content: content({ ...selection(f.pair, f.leafA), unitRevisionId: f.leafB.revisionId }),
     });
+    expect(forged).toMatchObject({ location: null, locationState: 'stale' });
     await expect(
       f.service.submitApplication(f.applicant, forged.id, forged.version),
     ).rejects.toMatchObject({ code: 'conflict' });
@@ -345,6 +422,11 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     );
     const b = nextPair(f);
     await provisionSyntheticHotelReleasePair(client, b, environment);
+    expect(await f.service.getMyApplication(f.applicant, old.id)).toMatchObject({
+      location: oldSnapshot,
+      locationState: 'submitted_snapshot',
+      content: old.content,
+    });
     await grant(
       f.otherReviewer,
       f.officeB,

@@ -168,6 +168,12 @@ class PostgresHotelOnboardingTransaction implements HotelOnboardingTransaction {
          FROM hotel_geography_unit_revisions revision
          WHERE revision.geography_release_id = $1
            AND revision.unit_id = $2 AND revision.id = $3
+           AND EXISTS (
+             SELECT 1 FROM hotel_geography_releases geography
+             WHERE geography.id = revision.geography_release_id
+               AND geography.synthetic = true AND geography.validation_status = 'valid'
+               AND geography.activated_at IS NOT NULL
+           )
          UNION ALL
          SELECT parent.id, parent.unit_id, parent.unit_type, parent.parent_revision_id,
                 chain.path || parent.id, chain.depth + 1
