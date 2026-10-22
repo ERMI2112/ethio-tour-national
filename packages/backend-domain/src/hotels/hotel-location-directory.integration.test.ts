@@ -6,8 +6,13 @@ import { isDisposableHotelTestDatabase } from '@ethio-tour/db/testing/disposable
 import {
   provisionSyntheticHotelReleasePair,
   provisionSyntheticHotelRoutingRelease,
+  provisionSyntheticHotelReviewScope,
 } from '@ethio-tour/db';
-import type { HotelGeographyUnitInput, SyntheticHotelReleasePairImport } from '@ethio-tour/db';
+import type {
+  HotelGeographyUnitInput,
+  SyntheticHotelReleasePairImport,
+  SyntheticHotelReviewScopeInput,
+} from '@ethio-tour/db';
 import type {
   HotelApplicationContent,
   HotelLocationSearchQuery,
@@ -28,6 +33,11 @@ if (process.env.HOTEL_PILOT_TEST_REQUIRED === 'true' && !safeDatabase) {
 }
 const suite = describe.skipIf(!safeDatabase);
 const environment = { NODE_ENV: 'test', REGISTRY_POLICY_MODE: 'demo' };
+const reviewScopeEnvironment = {
+  ...environment,
+  HOTEL_PILOT_TEST_DATABASE_URL: databaseUrl,
+  HOTEL_PILOT_TEST_DISPOSABLE: process.env.HOTEL_PILOT_TEST_DISPOSABLE,
+};
 const issuer = 'https://identity.example.test/realms/synthetic-directory';
 const readCapability = 'hotel:application:bureau:read';
 const decideCapability = 'hotel:application:bureau:decide';
@@ -528,6 +538,206 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     ).toMatchObject({ organizationId: f.officeB, routingReleaseId: routing.id });
     await assertBinding(old.id, f.pair);
     await assertBinding(fresh.id, { ...f.pair, routing });
+  });
+
+  it('provisions explicit B-only review authority idempotently without inheriting A authority', async () => {
+    const f = await fixture();
+    const old = await submit(f, f.leafB);
+    const b = nextPair(f);
+    await provisionSyntheticHotelReleasePair(client, b, environment);
+    const unitB = b.geography.units.find((item) => item.unitId === f.leafB.unitId)!;
+    const freshDraft = await f.service.createApplication(f.applicant, {
+      content: content(selection(b, unitB)),
+    });
+    const fresh = await f.service.submitApplication(f.applicant, freshDraft.id, freshDraft.version);
+    const reviewer = await actor('explicit-B-only-officer');
+    const input = await scopeInput(reviewer, f.officeB, b.geography.id, f.rootB.unitId);
+    const before = await scopeCounts(input.membershipId);
+    const duplicate = await Promise.all([
+      provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
+      provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
+    ]);
+    expect(duplicate.map((result) => result.created).sort()).toEqual([false, true]);
+    expect(duplicate[0]!.grantId).toBe(duplicate[1]!.grantId);
+    expect(duplicate[0]!.scopeId).toBe(duplicate[1]!.scopeId);
+    expect(await scopeCounts(input.membershipId)).toEqual({
+      grants: before.grants + 1,
+      scopes: before.scopes + 1,
+      audits: before.audits + 1,
+    });
+    await provisionSyntheticHotelReviewScope(
+      client,
+      { ...input, capability: decideCapability },
+      reviewScopeEnvironment,
+    );
+    expect((await f.service.listBureauCases(reviewer)).items.map((item) => item.caseId)).toContain(
+      await caseId(fresh.id),
+    );
+    await expect(f.service.getBureauCase(reviewer, await caseId(old.id))).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    await expect(
+      f.service.decideBureauCase(reviewer, await caseId(old.id), {
+        expectedVersion: old.version,
+        decision: 'approve',
+        reason: 'B authority cannot approve A.',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(
+      await f.service.decideBureauCase(reviewer, await caseId(fresh.id), {
+        expectedVersion: fresh.version,
+        decision: 'approve',
+        reason: 'Explicit synthetic B scope.',
+      }),
+    ).toMatchObject({ bureauDecision: { decision: 'approve' } });
+    const scopes = await client.unsafe<{ hotel_geography_release_id: string }[]>(
+      'SELECT hotel_geography_release_id FROM grant_scopes WHERE grant_id IN (SELECT id FROM access_grants WHERE membership_id = $1)',
+      [input.membershipId],
+    );
+    expect(scopes.every((scope) => scope.hotel_geography_release_id === b.geography.id)).toBe(true);
+  });
+
+  it.each(['profile', 'membership', 'grant'] as const)(
+    'never reactivates a revoked %s during explicit provisioning',
+    async (entity) => {
+      const f = await fixture();
+      const submitted = await submit(f, f.leafA);
+      const reviewer = await actor('revoked-explicit-officer');
+      const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.rootA.unitId);
+      const result = await provisionSyntheticHotelReviewScope(
+        client,
+        input,
+        reviewScopeEnvironment,
+      );
+      expect(await f.service.getBureauCase(reviewer, await caseId(submitted.id))).toMatchObject({
+        id: submitted.id,
+      });
+      if (entity === 'profile')
+        await client.unsafe('UPDATE user_profiles SET active = false WHERE id = $1', [
+          await profileId(reviewer),
+        ]);
+      else if (entity === 'membership')
+        await client.unsafe('UPDATE memberships SET active = false WHERE id = $1', [
+          input.membershipId,
+        ]);
+      else
+        await client.unsafe('UPDATE access_grants SET active = false WHERE id = $1', [
+          result.grantId,
+        ]);
+      const before = await scopeCounts(input.membershipId);
+      await expect(
+        provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
+      ).rejects.toThrow(/binding|revoked/);
+      expect(await scopeCounts(input.membershipId)).toEqual(before);
+      await expect(
+        f.service.getBureauCase(reviewer, await caseId(submitted.id)),
+      ).rejects.toMatchObject({ code: entity === 'profile' ? 'forbidden' : 'not_found' });
+      const [states] = await client.unsafe(
+        `SELECT profile.active AS profile_active, membership.active AS membership_active, access.active AS grant_active
+      FROM memberships membership JOIN user_profiles profile ON profile.id = membership.user_profile_id
+      JOIN access_grants access ON access.membership_id = membership.id WHERE access.id = $1`,
+        [result.grantId],
+      );
+      expect(states?.[`${entity}_active`]).toBe(false);
+    },
+  );
+
+  it.each([
+    'identity',
+    'organization',
+    'unconfigured-office',
+    'unpublished-release',
+    'invalid-release',
+    'missing-unit',
+    'non-demo-grant',
+    'descendant-conflict',
+  ] as const)(
+    'rejects conflicting explicit scope provisioning without changing authority: %s',
+    async (failure) => {
+      const f = await fixture();
+      const reviewer = await actor('invalid-explicit-officer');
+      let organization = f.officeA;
+      if (failure === 'unconfigured-office') {
+        organization = `unconfigured-office-${randomUUID()}`;
+        await client.unsafe(
+          `INSERT INTO organizations (id, display_name, organization_type, level, administrative_unit_id, is_synthetic)
+          SELECT $1, 'Synthetic unconfigured office', organization_type, level, administrative_unit_id, true FROM organizations WHERE id = $2`,
+          [organization, f.officeA],
+        );
+      }
+      const input = await scopeInput(reviewer, organization, f.pair.geography.id, f.rootA.unitId);
+      if (failure === 'identity') input.subjectId = f.reviewer.subjectId;
+      if (failure === 'organization') input.organizationId = f.officeB;
+      if (failure === 'missing-unit') input.scopeUnitId = `missing-${randomUUID()}`;
+      if (failure === 'unpublished-release' || failure === 'invalid-release') {
+        input.geographyReleaseId = `unpublished-scope-${randomUUID()}`;
+        await client.unsafe(
+          `INSERT INTO hotel_geography_releases (id, source_name, source_edition, source_reference, synthetic, validation_status)
+          VALUES ($1, 'Synthetic unreleased fixture', 'unpublished', 'urn:synthetic:unreleased', true, $2)`,
+          [input.geographyReleaseId, failure === 'invalid-release' ? 'invalid' : 'valid'],
+        );
+      }
+      if (failure === 'non-demo-grant')
+        await client.unsafe(
+          `INSERT INTO access_grants (membership_id, capability, organization_id, demo_only, production_decision_enabled)
+        VALUES ($1, $2, $3, false, false)`,
+          [input.membershipId, input.capability, input.organizationId],
+        );
+      if (failure === 'descendant-conflict') {
+        await provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment);
+        input.includeDescendants = false;
+      }
+      const before = await scopeCounts(input.membershipId);
+      await expect(
+        provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
+      ).rejects.toThrow(/binding|unavailable|conflicts/);
+      expect(await scopeCounts(input.membershipId)).toEqual(before);
+    },
+  );
+
+  it('keeps independently provisioned read and decision scopes within their own complete grants', async () => {
+    const f = await fixture();
+    const submitted = await submit(f, f.leafA);
+    const reviewer = await actor('explicit-mixed-grant-officer');
+    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.rootA.unitId);
+    await provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment);
+    await provisionSyntheticHotelReviewScope(
+      client,
+      { ...input, capability: decideCapability, scopeUnitId: f.rootB.unitId },
+      reviewScopeEnvironment,
+    );
+    expect(await f.service.getBureauCase(reviewer, await caseId(submitted.id))).toMatchObject({
+      id: submitted.id,
+    });
+    await expect(
+      f.service.decideBureauCase(reviewer, await caseId(submitted.id), {
+        expectedVersion: submitted.version,
+        decision: 'approve',
+        reason: 'Read scope cannot satisfy the decision grant.',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('rolls back a newly provisioned grant and scope if its audit event is rejected', async () => {
+    const f = await fixture();
+    const reviewer = await actor('audit-rejected-officer');
+    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.rootA.unitId);
+    const before = await scopeCounts(input.membershipId);
+    const trigger = `reject_scope_audit_${randomUUID().replace(/-/g, '')}`;
+    await client.unsafe(`CREATE FUNCTION ${trigger}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.action = 'hotel.directory.review_scope.provisioned' THEN RAISE EXCEPTION 'synthetic scope audit rejection'; END IF; RETURN NEW; END $$`);
+    try {
+      await client.unsafe(
+        `CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION ${trigger}()`,
+      );
+      await expect(
+        provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
+      ).rejects.toThrow('synthetic scope audit rejection');
+      expect(await scopeCounts(input.membershipId)).toEqual(before);
+    } finally {
+      await client.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_events`);
+      await client.unsafe(`DROP FUNCTION ${trigger}()`);
+    }
   });
 
   it.each(['membership', 'grant'] as const)(
@@ -1181,6 +1391,42 @@ async function profileId(identity: RegistryActor): Promise<string> {
   );
   if (!row) throw new Error('Synthetic identity fixture was not created.');
   return row.id;
+}
+
+async function scopeInput(
+  identity: RegistryActor,
+  organizationId: string,
+  geographyReleaseId: string,
+  scopeUnitId: string,
+): Promise<SyntheticHotelReviewScopeInput> {
+  const [member] = await client.unsafe<{ id: string }[]>(
+    `INSERT INTO memberships (user_profile_id, organization_id, label)
+    VALUES ($1, $2, 'Synthetic explicit review officer') RETURNING id`,
+    [await profileId(identity), organizationId],
+  );
+  if (!member) throw new Error('Explicit synthetic membership fixture was not created.');
+  return {
+    issuer: identity.issuer,
+    subjectId: identity.subjectId,
+    membershipId: member.id,
+    organizationId,
+    capability: readCapability,
+    geographyReleaseId,
+    scopeUnitId,
+    includeDescendants: true,
+  };
+}
+
+async function scopeCounts(membershipId: string) {
+  const [row] = await client.unsafe<{ grants: number; scopes: number; audits: number }[]>(
+    `SELECT
+    (SELECT count(*)::int FROM access_grants WHERE membership_id = $1) AS grants,
+    (SELECT count(*)::int FROM grant_scopes WHERE grant_id IN (SELECT id FROM access_grants WHERE membership_id = $1)) AS scopes,
+    (SELECT count(*)::int FROM audit_events WHERE action = 'hotel.directory.review_scope.provisioned' AND details->>'membershipId' = $2) AS audits`,
+    [membershipId, membershipId],
+  );
+  if (!row) throw new Error('Explicit review authority counts are unavailable.');
+  return row;
 }
 
 async function grant(

@@ -4,8 +4,12 @@ export { provisionSyntheticHotelDirectoryDemo } from './synthetic-hotel-director
 export {
   provisionSyntheticHotelReleasePair,
   provisionSyntheticHotelRoutingRelease,
+  provisionSyntheticHotelReviewScope,
 } from './provision-hotel-location-directory';
-export type { SyntheticHotelReleasePairImport } from './provision-hotel-location-directory';
+export type {
+  SyntheticHotelReleasePairImport,
+  SyntheticHotelReviewScopeInput,
+} from './provision-hotel-location-directory';
 export {
   resolveHotelRouteCandidates,
   validateHotelGeographyImport,

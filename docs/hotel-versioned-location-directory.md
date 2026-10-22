@@ -132,6 +132,70 @@ The fixture has different hierarchy shapes, duplicate `Central` names and stored
 aliases. Only the two configured synthetic hotel locations have an exact route;
 other selectable units demonstrate honest unavailable-routing behavior.
 
+### Explicit Review Scopes For Another Release
+
+Use the same provisioner after activating a synthetic geography/routing release.
+The operator must supply an **existing** canonical identity, active membership
+and synthetic administrative organization from the disposable setup manifest.
+This operation does not create accounts or memberships, map issuer aliases,
+transfer ownership, change membership state or reactivate revoked grants.
+
+Put an explicit request outside Git, using actual IDs from that task's setup.
+The following values are illustrative synthetic placeholders, not credentials:
+
+```json
+{
+  "issuer": "https://identity.example.test/realms/synthetic-review",
+  "subjectId": "synthetic-officer-subject",
+  "membershipId": "80000000-0000-4000-8000-000000000001",
+  "organizationId": "synthetic-office-B",
+  "capability": "hotel:application:bureau:read",
+  "geographyReleaseId": "synthetic-geography-B",
+  "scopeUnitId": "synthetic-area-B",
+  "includeDescendants": true
+}
+```
+
+With the guarded disposable URL and opt-in configured only in this task's
+process environment, and `NODE_ENV=test` (or `development`) plus
+`REGISTRY_POLICY_MODE=demo`, run:
+
+```powershell
+pnpm --filter @ethio-tour/db db:provision:hotel-directory:test --review-scope <private-synthetic-scope.json>
+```
+
+Provision `hotel:application:bureau:decide` separately if the operator intends
+to permit decisions. Each case operation must still match one complete grant;
+read authority cannot supply missing geographic coverage to a decision grant.
+Only those two Bureau capabilities are accepted. No Administrator, provider,
+public, commercial or production authority is granted.
+
+The provisioner verifies the client's actual connection target against the
+guarded target before connecting, then verifies the effective database name.
+It requires an active exact identity/membership/organization binding, an
+activated valid synthetic geography containing the scope unit, and an activated
+compatible synthetic routing release with an enabled rule for that office.
+An activated historical release can be explicitly authorized; it need not be
+the current pair. This does not alter any case assignment or imply official
+jurisdiction. Synthetic identity provenance comes from the isolated setup;
+profiles and memberships do not acquire an invented verification flag.
+
+The transaction locks the membership and existing grant, adds only the requested
+release scope, and records `hotel.directory.review_scope.provisioned` under the
+local-provisioner actor. Audit failure rolls back new authority. Repeating the
+identical request returns the same grant/scope without duplicate authority or
+success audit. A conflicting descendant flag, revoked grant/membership/profile,
+non-demo or production-enabled grant, wrong identity/office, or unavailable
+release/scope fails; the tool never widens or repairs a conflicting binding.
+Expected refusals print static explanations only, without identity or connection
+values. Other failures use the existing generic sanitized CLI error.
+
+Stable unit IDs do not copy authority between releases. Release B needs an
+explicit request even if its unit ID also appeared in A. Current revocation
+still denies both new and historical case access. No migration or manual SQL
+is needed for this operation; the existing release-scope keys from migration
+0005 are used. This tool is not a production grant-administration interface.
+
 API details and limits are in [the shared contract](hotel-location-directory-api.md).
 Source-specific executed results belong in the evidence handoff, not this design
 description. Small synthetic fixtures do not establish national-scale performance.
