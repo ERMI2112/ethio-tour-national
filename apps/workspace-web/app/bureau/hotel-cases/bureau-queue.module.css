@@ -1,0 +1,61 @@
+.queue {
+  min-width: 0;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1rem;
+  padding-block: 1rem;
+  border-block: 1px solid #d2ddd7;
+}
+
+.filters > button {
+  margin-top: 1.7rem;
+}
+
+.filters input,
+.filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.count {
+  color: #52615a;
+  margin-block: 1rem;
+}
+
+.caseCard {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.caseCard h3,
+.caseCard h4 {
+  margin-block: 0 0.5rem;
+}
+
+.notes p {
+  white-space: pre-wrap;
+}
+
+.queue [hidden] {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .filters > button {
+    margin-top: 0;
+    justify-self: start;
+  }
+
+  .caseCard {
+    padding: 1rem;
+  }
+}

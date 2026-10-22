@@ -7,6 +7,8 @@ import {
   getBureauHotelCases,
 } from '@ethio-tour/api-client';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { HotelBureauCaseStatus } from '@ethio-tour/contracts';
+import styles from './bureau-queue.module.css';
 import { HotelLocationDetails } from '../../components/hotel-location';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../../lib/hotel-pilot-session';
@@ -19,6 +21,14 @@ import {
   type HotelApplicationDecision,
   type HotelBureauCaseResponse,
 } from '../../lib/hotel-pilot-ui-state';
+
+const reviewStates: ReadonlyArray<{ value: HotelBureauCaseStatus; label: string }> = [
+  { value: 'submitted', label: 'Submitted' },
+  { value: 'in_review', label: 'In review' },
+  { value: 'changes_requested', label: 'Changes requested' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+];
 
 export function BureauHotelCasesScreen() {
   const { accessToken, signIn } = useHotelPilotSession();
@@ -34,6 +44,11 @@ export function BureauHotelCasesScreen() {
   const requestSequence = useRef(0);
   const currentToken = useRef(accessToken);
   const submissionInFlight = useRef(false);
+  const [filters, setFilters] = useState<{
+    token: string | null;
+    query: string;
+    state: HotelBureauCaseStatus | 'all';
+  }>({ token: accessToken, query: '', state: 'all' });
 
   const reload = useCallback(async () => {
     const requestToken = accessToken;
@@ -79,6 +94,7 @@ export function BureauHotelCasesScreen() {
     setErrorToken(null);
     setNotice(null);
     setNoticeToken(null);
+    setFilters({ token: accessToken, query: '', state: 'all' });
     if (!accessToken) {
       return;
     }
@@ -91,6 +107,7 @@ export function BureauHotelCasesScreen() {
       requestSequence.current++;
       setCases([]);
       setCasesToken(null);
+      setFilters({ token: currentToken.current, query: '', state: 'all' });
       setError('Your authenticated session is missing or has expired.');
       setErrorToken(currentToken.current);
     };
@@ -134,6 +151,16 @@ export function BureauHotelCasesScreen() {
   const visibleError = errorToken === accessToken ? error : null;
   const visibleNotice = noticeToken === accessToken ? notice : null;
   const isQueueBusy = isQueueLoading || submittingCaseId !== null;
+  const query = filters.token === accessToken ? filters.query : '';
+  const reviewState = filters.token === accessToken ? filters.state : 'all';
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matches = (caseItem: HotelBureauCaseResponse) =>
+    (reviewState === 'all' || caseItem.caseStatus === reviewState) &&
+    (!normalizedQuery ||
+      `${caseItem.content.claimedHotelName} ${caseItem.submittedLocation ? formatLocationHierarchy(caseItem.submittedLocation) : ''}`
+        .toLocaleLowerCase()
+        .includes(normalizedQuery));
+  const matchCount = visibleCases.filter(matches).length;
 
   return (
     <HotelPilotFrame
@@ -143,7 +170,7 @@ export function BureauHotelCasesScreen() {
       {!accessToken ? (
         <SessionUnavailable onSignIn={signIn} />
       ) : (
-        <section aria-labelledby="bureau-queue-title">
+        <section className={styles.queue} aria-labelledby="bureau-queue-title">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Assigned private queue</p>
@@ -158,6 +185,57 @@ export function BureauHotelCasesScreen() {
               Refresh queue
             </button>
           </div>
+          <div className={styles.filters}>
+            <div className="form-field">
+              <label htmlFor="bureau-case-search">Search loaded cases</label>
+              <input
+                id="bureau-case-search"
+                type="search"
+                value={query}
+                onChange={(event) =>
+                  setFilters({ token: accessToken, query: event.target.value, state: reviewState })
+                }
+                aria-describedby="bureau-search-hint"
+              />
+              <p id="bureau-search-hint" className="field-hint">
+                Hotel name or submitted location
+              </p>
+            </div>
+            <div className="form-field">
+              <label htmlFor="bureau-case-state">Review state</label>
+              <select
+                id="bureau-case-state"
+                value={reviewState}
+                onChange={(event) =>
+                  setFilters({
+                    token: accessToken,
+                    query,
+                    state: event.target.value as HotelBureauCaseStatus | 'all',
+                  })
+                }
+              >
+                <option value="all">All review states</option>
+                {reviewStates.map((state) => (
+                  <option key={state.value} value={state.value}>
+                    {state.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!query && reviewState === 'all'}
+              onClick={() => setFilters({ token: accessToken, query: '', state: 'all' })}
+            >
+              Reset filters
+            </button>
+          </div>
+          {casesToken === accessToken && (
+            <p className={styles.count} role="status" aria-live="polite" aria-atomic="true">
+              Showing {matchCount} of {visibleCases.length} loaded cases
+            </p>
+          )}
           {isQueueLoading && <LoadingState label="Loading assigned cases…" />}
           {visibleError && (
             <p className="error-message" role="alert">
@@ -172,15 +250,23 @@ export function BureauHotelCasesScreen() {
           {!isQueueLoading && visibleCases.length === 0 && !visibleError && (
             <p className="empty-state">No cases were returned for this account and scope.</p>
           )}
+          {!isQueueLoading && visibleCases.length > 0 && matchCount === 0 && (
+            <p className="empty-state">No loaded cases match these filters.</p>
+          )}
+          {visibleError && visibleCases.length > 0 && (
+            <p className="muted">Previously loaded cases are shown until a refresh succeeds.</p>
+          )}
           <div className="card-stack">
             {visibleCases.map((caseItem) => (
-              <BureauCaseCard
-                key={`${accessToken}:${caseItem.caseId}`}
-                caseItem={caseItem}
-                onDecide={decide}
-                onRefresh={reload}
-                isQueueBusy={isQueueBusy}
-              />
+              // Keep filtered forms mounted; only a session change or removed case clears them.
+              <div key={`${accessToken}:${caseItem.caseId}`} hidden={!matches(caseItem)}>
+                <BureauCaseCard
+                  caseItem={caseItem}
+                  onDecide={decide}
+                  onRefresh={reload}
+                  isQueueBusy={isQueueBusy}
+                />
+              </div>
             ))}
           </div>
         </section>
@@ -266,7 +352,10 @@ function BureauCaseCard({
   }
 
   return (
-    <article className="application-card" aria-labelledby={`bureau-case-${caseItem.caseId}`}>
+    <article
+      className={`application-card ${styles.caseCard}`}
+      aria-labelledby={`bureau-case-${caseItem.caseId}`}
+    >
       <div className="card-topline">
         <div>
           <p className="eyebrow">Case · application version {caseItem.currentVersion}</p>
@@ -274,12 +363,13 @@ function BureauCaseCard({
         </div>
         <span className="status status-neutral">{caseItem.caseStatus.replaceAll('_', ' ')}</span>
       </div>
-      {caseItem.content.applicantNotes && (
-        <div className="decision-details">
-          <strong>Applicant notes</strong>
-          <p>{caseItem.content.applicantNotes}</p>
-        </div>
-      )}
+      <section
+        className={`decision-details ${styles.notes}`}
+        aria-labelledby={`applicant-notes-${caseItem.caseId}`}
+      >
+        <h4 id={`applicant-notes-${caseItem.caseId}`}>Applicant notes</h4>
+        <p>{caseItem.content.applicantNotes || 'No applicant notes supplied.'}</p>
+      </section>
       <HotelLocationDetails
         location={caseItem.submittedLocation}
         selection={caseItem.content.locationSelection}
