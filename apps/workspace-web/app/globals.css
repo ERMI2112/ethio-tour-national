@@ -60,6 +60,28 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.secondary-button {
+  min-height: 42px;
+  border: 1px solid #145b49;
+  border-radius: 6px;
+  padding: 0.55rem 0.85rem;
+  color: #145b49;
+  background: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: #edf2ee;
+}
+
+.secondary-button:disabled {
+  border-color: #aebbb5;
+  color: #52615a;
+  background: #e6ece8;
+  cursor: not-allowed;
+}
+
 main {
   min-height: 100vh;
 }
@@ -207,9 +229,61 @@ main {
   background: #fff;
 }
 
+.form-field input:disabled,
+.form-field textarea:disabled,
+.form-field select:disabled {
+  border-color: #c2cec7;
+  color: #697871;
+  background: #f2f6f3;
+  cursor: not-allowed;
+}
+
 .form-field textarea {
   min-height: 110px;
   resize: vertical;
+}
+
+.field-hint-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 0.2rem;
+}
+
+.field-hint {
+  color: #52615a;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.decision-coverage-notice {
+  border-left: 3px solid #145b49;
+  border-radius: 4px;
+  padding: 0.55rem 0.8rem;
+  margin-bottom: 0.5rem;
+  background: #edf5f0;
+  font-size: 0.88rem;
+}
+
+.decision-coverage-notice p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.coverage-version,
+.coverage-location {
+  font-weight: 700;
+}
+
+.error-container {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .application-card {
@@ -309,5 +383,19 @@ main {
 
   .location-search-row {
     grid-template-columns: 1fr;
+  }
+
+  .conflict-actions {
+    display: grid;
+    width: 100%;
+  }
+
+  .secondary-button {
+    width: 100%;
+    text-align: center;
+  }
+
+  .decision-coverage-notice {
+    font-size: 0.85rem;
   }
 }

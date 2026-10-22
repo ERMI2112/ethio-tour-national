@@ -5,6 +5,7 @@ import type {
   getBureauHotelCases,
   getMyHotelApplications,
 } from '@ethio-tour/api-client';
+import type { HotelLocation, HotelSubmittedLocation } from '@ethio-tour/contracts';
 
 export type HotelApplicationResponse = Awaited<
   ReturnType<typeof getMyHotelApplications>
@@ -15,6 +16,39 @@ export type HotelBureauCaseResponse = Awaited<
 export type HotelApplicationContent = HotelApplicationResponse['content'];
 export type HotelApplicationDecision = Parameters<typeof decideHotelApplication>[1]['decision'];
 export type HotelAdmissionDecision = Parameters<typeof decideHotelAdmission>[1]['decision'];
+
+export const MAX_DECISION_REASON_LENGTH = 1000;
+
+export function isDecisionReasonValid(reason: string): boolean {
+  const trimmed = reason.trim();
+  return trimmed.length > 0 && trimmed.length <= MAX_DECISION_REASON_LENGTH;
+}
+
+export function formatLocationHierarchy(
+  location: HotelLocation | HotelSubmittedLocation | null | undefined,
+): string {
+  if (!location) return 'No submitted location recorded';
+  if (
+    'hierarchy' in location &&
+    Array.isArray(location.hierarchy) &&
+    location.hierarchy.length > 0
+  ) {
+    return location.hierarchy
+      .map((node) => {
+        if ('displayName' in node && typeof node.displayName === 'string') return node.displayName;
+        if ('label' in node && typeof node.label === 'string') return node.label;
+        return 'Unknown unit';
+      })
+      .join(' / ');
+  }
+  if ('displayName' in location && typeof location.displayName === 'string') {
+    return location.displayName;
+  }
+  if ('label' in location && typeof location.label === 'string') {
+    return location.label;
+  }
+  return 'Applicant-declared location';
+}
 
 export function canSubmitHotelApplication(application: HotelApplicationResponse) {
   return application.status === 'draft';

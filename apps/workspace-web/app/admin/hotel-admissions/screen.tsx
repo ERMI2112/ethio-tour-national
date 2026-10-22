@@ -1,13 +1,21 @@
 'use client';
 
-import { decideHotelAdmission, getHotelAdmissionQueue } from '@ethio-tour/api-client';
-import React, { useCallback, useEffect, useState } from 'react';
+import {
+  API_UNAUTHORIZED_EVENT,
+  ApiClientError,
+  decideHotelAdmission,
+  getHotelAdmissionQueue,
+} from '@ethio-tour/api-client';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { HotelLocationDetails } from '../../components/hotel-location';
 import { HotelPilotFrame, LoadingState, SessionUnavailable } from '../../components/hotel-pilot-ui';
 import { useHotelPilotSession } from '../../lib/hotel-pilot-session';
 import {
   canDecideHotelAdmission,
   describeApiFailure,
+  formatLocationHierarchy,
+  isDecisionReasonValid,
+  MAX_DECISION_REASON_LENGTH,
   type HotelAdmissionDecision,
   type HotelApplicationResponse,
 } from '../../lib/hotel-pilot-ui-state';
@@ -18,37 +26,83 @@ export function AdminHotelAdmissionsScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   const reload = useCallback(async () => {
     if (!accessToken) return;
+    const thisSequence = ++requestSequence.current;
     setLoading(true);
     setError(null);
     try {
       const response = await getHotelAdmissionQueue({ accessToken });
+      if (thisSequence !== requestSequence.current) return;
       setApplications(response.items);
     } catch (requestError) {
+      if (thisSequence !== requestSequence.current) return;
+      if (
+        requestError instanceof ApiClientError &&
+        (requestError.status === 401 || requestError.status === 403)
+      ) {
+        setApplications([]);
+      }
       setError(describeApiFailure(requestError, 'loading the admission queue'));
     } finally {
-      setLoading(false);
+      if (thisSequence === requestSequence.current) {
+        setLoading(false);
+      }
     }
   }, [accessToken]);
 
+  // Session handling: clear private applications when session ends
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (!accessToken) {
+      requestSequence.current++;
+      setApplications([]);
+      setError(null);
+      setNotice(null);
+    } else {
+      void reload();
+    }
+  }, [accessToken, reload]);
+
+  // Session handling: clear private applications when unauthorized event is received
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      requestSequence.current++;
+      setApplications([]);
+      setError('Your authenticated session is missing or has expired.');
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
+      return () => window.removeEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
+    }
+  }, []);
 
   async function decide(
     applicationId: string,
     request: { expectedVersion: number; decision: HotelAdmissionDecision; reason: string },
   ) {
-    if (!accessToken) return;
-    const updated = await decideHotelAdmission(applicationId, request, { accessToken });
-    setApplications((current) =>
-      current.map((application) => (application.id === updated.id ? updated : application)),
-    );
-    setNotice('The API accepted the admission decision. The queue is refreshing.');
-    await reload();
+    if (!accessToken || submittingId !== null) return;
+    setSubmittingId(applicationId);
+    try {
+      const updated = await decideHotelAdmission(applicationId, request, { accessToken });
+      setApplications((current) =>
+        current.map((application) => (application.id === updated.id ? updated : application)),
+      );
+      setNotice('The API accepted the admission decision. The queue is refreshing.');
+      await reload();
+    } catch (err) {
+      if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
+        setApplications([]);
+      }
+      throw err;
+    } finally {
+      setSubmittingId(null);
+    }
   }
+
+  const isQueueBusy = loading || submittingId !== null;
 
   return (
     <HotelPilotFrame
@@ -64,7 +118,12 @@ export function AdminHotelAdmissionsScreen() {
               <p className="eyebrow">Private Administrator queue</p>
               <h2 id="admission-queue-title">Applications eligible for admission</h2>
             </div>
-            <button type="button" onClick={() => void reload()} disabled={loading}>
+            <button
+              type="button"
+              onClick={() => void reload()}
+              disabled={isQueueBusy}
+              aria-busy={loading ? 'true' : undefined}
+            >
               Refresh queue
             </button>
           </div>
@@ -92,6 +151,8 @@ export function AdminHotelAdmissionsScreen() {
                 key={application.id}
                 application={application}
                 onDecide={decide}
+                onRefresh={reload}
+                isQueueBusy={isQueueBusy}
               />
             ))}
           </div>
@@ -104,35 +165,61 @@ export function AdminHotelAdmissionsScreen() {
 function AdmissionApplicationCard({
   application,
   onDecide,
+  onRefresh,
+  isQueueBusy,
 }: Readonly<{
   application: HotelApplicationResponse;
   onDecide: (
     applicationId: string,
     request: { expectedVersion: number; decision: HotelAdmissionDecision; reason: string },
   ) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  isQueueBusy: boolean;
 }>) {
   const [decision, setDecision] = useState<HotelAdmissionDecision | ''>('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isConflict, setIsConflict] = useState(false);
   const eligible = canDecideHotelAdmission(application);
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!decision || !reason.trim() || busy || !eligible) return;
+  const trimmedReason = reason.trim();
+  const reasonLength = trimmedReason.length;
+  const isReasonValid = isDecisionReasonValid(reason);
+  const isReasonTooLong = reason.length > MAX_DECISION_REASON_LENGTH;
+  const canSubmit = Boolean(decision) && isReasonValid && !busy && !isQueueBusy && eligible;
+  const locationSummary = formatLocationHierarchy(application.location);
+
+  async function submit(event?: React.FormEvent<HTMLFormElement>) {
+    if (event) event.preventDefault();
+    if (!decision || !canSubmit) return;
     setBusy(true);
     setError(null);
+    setIsConflict(false);
     try {
       await onDecide(application.id, {
         expectedVersion: application.version,
         decision,
-        reason: reason.trim(),
+        reason: trimmedReason,
       });
     } catch (requestError) {
-      setError(describeApiFailure(requestError, 'recording the Administrator decision'));
+      if (requestError instanceof ApiClientError && requestError.status === 409) {
+        setIsConflict(true);
+        setError(
+          'Application version conflict: The application record changed or a newer version was submitted. Your entered reason has been preserved. Refresh the list to review the current version before trying again.',
+        );
+      } else {
+        setError(describeApiFailure(requestError, 'recording the Administrator decision'));
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleRefresh() {
+    setError(null);
+    setIsConflict(false);
+    await onRefresh();
   }
 
   return (
@@ -175,15 +262,35 @@ function AdmissionApplicationCard({
           A current-version Bureau approval is required before this decision can be submitted.
         </p>
       ) : (
-        <form className="form-stack decision-details" onSubmit={submit}>
+        <form className="form-stack decision-details" onSubmit={submit} noValidate>
+          <div className="decision-coverage-notice" role="note">
+            <p className="decision-coverage-text">
+              <strong>Decision target:</strong> Application version{' '}
+              <span className="coverage-version">{application.currentVersion}</span>
+              {locationSummary ? (
+                <>
+                  {' '}
+                  · Submitted location: <span className="coverage-location">{locationSummary}</span>
+                </>
+              ) : null}
+            </p>
+          </div>
           <div className="form-field">
             <label htmlFor={`admin-decision-${application.id}`}>
               Private platform admission decision
             </label>
+            <p id={`admin-decision-hint-${application.id}`} className="field-hint">
+              Target: version {application.currentVersion} · {locationSummary}
+            </p>
             <select
               id={`admin-decision-${application.id}`}
               value={decision}
-              onChange={(event) => setDecision(event.target.value as HotelAdmissionDecision | '')}
+              onChange={(event) => {
+                setDecision(event.target.value as HotelAdmissionDecision | '');
+                if (error && !isConflict) setError(null);
+              }}
+              disabled={busy || isQueueBusy}
+              aria-describedby={`admin-decision-hint-${application.id}`}
               required
             >
               <option value="">Choose an outcome</option>
@@ -196,16 +303,49 @@ function AdmissionApplicationCard({
             <textarea
               id={`admin-reason-${application.id}`}
               value={reason}
-              onChange={(event) => setReason(event.target.value)}
+              onChange={(event) => {
+                setReason(event.target.value);
+                if (error && !isConflict) setError(null);
+              }}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  void submit();
+                }
+              }}
+              maxLength={MAX_DECISION_REASON_LENGTH}
+              disabled={busy || isQueueBusy}
+              aria-describedby={`admin-reason-hint-${application.id}${error ? ` admin-reason-error-${application.id}` : ''}`}
+              aria-invalid={isReasonTooLong ? 'true' : undefined}
+              placeholder="Enter justification for this admission decision (required, up to 1000 characters)"
               required
             />
+            <div className="field-hint-row">
+              <span id={`admin-reason-hint-${application.id}`} className="field-hint">
+                {reasonLength} / {MAX_DECISION_REASON_LENGTH} characters (required)
+              </span>
+            </div>
           </div>
           {error && (
-            <p className="error-message" role="alert">
-              {error}
-            </p>
+            <div className="error-container">
+              <p id={`admin-reason-error-${application.id}`} className="error-message" role="alert">
+                {error}
+              </p>
+              {isConflict && (
+                <div className="conflict-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleRefresh()}
+                    disabled={busy || isQueueBusy}
+                  >
+                    Refresh application
+                  </button>
+                </div>
+              )}
+            </div>
           )}
-          <button type="submit" disabled={busy || !decision || !reason.trim()}>
+          <button type="submit" disabled={!canSubmit} aria-busy={busy ? 'true' : undefined}>
             {busy ? 'Recording decision…' : 'Record private admission decision'}
           </button>
         </form>
