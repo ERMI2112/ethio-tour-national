@@ -782,13 +782,35 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
   );
 
   it('keeps independently provisioned read and decision scopes within their own complete grants', async () => {
+    let decisionRoutedLocation: HotelGeographyUnitInput | undefined;
     const f = await fixture((pair) => {
       const rule = pair.routing.rules[0]!;
       const matched = pair.geography.units.find((unit) => unit.unitId === rule.matchUnitId);
       if (!matched?.parentUnitId) throw new Error('Synthetic route parent fixture is missing.');
       rule.scopeUnitId = matched.parentUnitId;
+      decisionRoutedLocation = unit(
+        `${matched.unitId}-decision-scope-child`,
+        'Synthetic decision-scope child',
+        matched.unitId,
+        'demo-locality',
+      );
+      pair.geography = {
+        ...pair.geography,
+        units: [...pair.geography.units, decisionRoutedLocation],
+      };
+      pair.routing.rules.push({
+        id: randomUUID(),
+        matchUnitId: decisionRoutedLocation.unitId,
+        matchMode: 'exact',
+        organizationId: rule.organizationId,
+        scopeUnitId: matched.unitId,
+        enabled: true,
+      });
     });
     const submitted = await submit(f, f.leafA);
+    if (!decisionRoutedLocation)
+      throw new Error('Synthetic decision-scope route fixture is missing.');
+    const decisionScopedCase = await submit(f, decisionRoutedLocation);
     const reviewer = await actor('explicit-mixed-grant-officer');
     const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.branch.unitId);
     await provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment);
@@ -799,7 +821,21 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     );
     expect(await f.service.getBureauCase(reviewer, await caseId(submitted.id))).toMatchObject({
       id: submitted.id,
+      assignment: { organizationId: f.officeA, scopeUnitId: f.branch.unitId },
     });
+    expect(
+      await f.service.getBureauCase(reviewer, await caseId(decisionScopedCase.id)),
+    ).toMatchObject({
+      id: decisionScopedCase.id,
+      assignment: { organizationId: f.officeA, scopeUnitId: f.leafA.unitId },
+    });
+    await expect(
+      f.service.decideBureauCase(reviewer, await caseId(decisionScopedCase.id), {
+        expectedVersion: decisionScopedCase.version,
+        decision: 'approve',
+        reason: 'The explicit decision grant covers this routed scope.',
+      }),
+    ).resolves.toMatchObject({ bureauDecision: { decision: 'approve' } });
     await expect(
       f.service.decideBureauCase(reviewer, await caseId(submitted.id), {
         expectedVersion: submitted.version,
