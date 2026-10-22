@@ -5,6 +5,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 export function MobileNav({ children }: Readonly<{ children: React.ReactNode }>) {
   const [open, setOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   const toggle = useCallback(() => {
     setOpen((prev) => !prev);
@@ -13,10 +14,17 @@ export function MobileNav({ children }: Readonly<{ children: React.ReactNode }>)
   useEffect(() => {
     if (!open) return;
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') {
+        setOpen(false);
+        if (navRef.current?.contains(document.activeElement)) toggleRef.current?.focus();
+      }
     };
     const handleClick = (event: MouseEvent) => {
-      if (navRef.current && !navRef.current.contains(event.target as Node)) {
+      if (
+        navRef.current &&
+        !navRef.current.contains(event.target as Node) &&
+        !toggleRef.current?.contains(event.target as Node)
+      ) {
         setOpen(false);
       }
     };
@@ -31,6 +39,7 @@ export function MobileNav({ children }: Readonly<{ children: React.ReactNode }>)
   return (
     <>
       <button
+        ref={toggleRef}
         type="button"
         className="mobile-nav-toggle"
         aria-expanded={open}

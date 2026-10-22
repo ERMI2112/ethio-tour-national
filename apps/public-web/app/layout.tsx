@@ -3,8 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'EthioTour National',
-  description:
-    'EthioTour National — a platform for Ethiopian tourism, connecting destinations, service providers, and regulatory workflows.',
+  description: 'EthioTour National: private hotel onboarding in a controlled synthetic pilot.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

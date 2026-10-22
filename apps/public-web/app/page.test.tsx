@@ -1,11 +1,12 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import PublicHomePage from './page';
 
 beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_WORKSPACE_URL', 'http://localhost:3001');
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('public homepage', () => {
   it('renders the brand in the header', () => {
@@ -22,8 +23,8 @@ describe('public homepage', () => {
 
   it('renders the hero with a tourism-focused heading and eyebrow', () => {
     const html = renderToStaticMarkup(<PublicHomePage />);
-    expect(html).toContain('National Tourism Platform');
-    expect(html).toContain('Discover Ethiopia');
+    expect(html).toContain('Synthetic hotel onboarding pilot');
+    expect(html).toContain('<h1>EthioTour National</h1>');
   });
 
   it('provides a working call to action to open the workspace', () => {
@@ -42,8 +43,11 @@ describe('public homepage', () => {
     const html = renderToStaticMarkup(<PublicHomePage />);
     // Implemented capabilities:
     expect(html).toContain('Hotel Onboarding');
-    expect(html).toContain('Bureau Verification');
-    expect(html).toContain('Destination Registry');
+    expect(html).toContain('Synthetic Bureau Review');
+    expect(html).toContain('Private Admission');
+    expect(html).toContain('not licenses or proof of authority');
+    expect(html).not.toContain('government verification');
+    expect(html).not.toContain('public discovery interface');
 
     // No invented booking, payment, reservation, or fake stats:
     expect(html).not.toContain('booking engine');
@@ -76,6 +80,13 @@ describe('public homepage', () => {
     expect(h1Count).toBe(1);
     expect(h2Count).toBeGreaterThanOrEqual(2);
     expect(h3Count).toBeGreaterThanOrEqual(3);
+  });
+
+  it('uses a configured origin with no double slash in private route links', () => {
+    vi.stubEnv('NEXT_PUBLIC_WORKSPACE_URL', 'https://workspace.example.test/');
+    const html = renderToStaticMarkup(<PublicHomePage />);
+    expect(html).toContain('href="https://workspace.example.test/hotels"');
+    expect(html).not.toContain('example.test//');
   });
 
   it('renders accessible mobile navigation controls with aria attributes', () => {

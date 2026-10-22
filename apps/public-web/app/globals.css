@@ -55,7 +55,7 @@ button {
   color: #145b49;
   font-weight: 800;
   font-size: 1.15rem;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -180,7 +180,7 @@ button {
 .hero {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(160deg, #0e4638 0%, #145b49 40%, #1a7a5e 100%);
+  background: #145b49;
   color: #fff;
 }
 
@@ -214,23 +214,23 @@ button {
   border-radius: 20px;
   font-size: 0.82rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.9);
 }
 
 .hero h1 {
   margin: 0 0 1rem;
-  font-size: clamp(2rem, 5vw, 3.2rem);
+  font-size: 2.5rem;
   font-weight: 800;
   line-height: 1.1;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .hero-subtitle {
   max-width: 600px;
   margin: 0 0 2rem;
-  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-size: 1.1rem;
   line-height: 1.55;
   color: rgba(255, 255, 255, 0.88);
 }
@@ -296,7 +296,7 @@ button {
   font-size: 1.7rem;
   font-weight: 800;
   color: #1c2925;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .section-lead {
@@ -316,7 +316,7 @@ button {
 
 .feature-card {
   border: 1px solid #d2ddd7;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 1.5rem;
   background: #fff;
 }
@@ -328,7 +328,7 @@ button {
   width: 44px;
   height: 44px;
   margin-bottom: 1rem;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 1.3rem;
 }
 
@@ -376,7 +376,7 @@ button {
 
 .entry-card {
   border: 1px solid #d2ddd7;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 1.5rem;
   background: #f4f7f5;
   transition: border-color 0.15s;
@@ -447,7 +447,7 @@ button {
   font-size: 0.82rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: #344a40;
 }
 

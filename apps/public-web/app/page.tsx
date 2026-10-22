@@ -30,15 +30,11 @@ export default function PublicHomePage() {
         <section className="hero">
           <div className="hero-pattern" aria-hidden="true" />
           <div className="hero-inner">
-            <p className="hero-eyebrow">National Tourism Platform</p>
-            <h1>
-              Discover Ethiopia.
-              <br />
-              Build Ethiopian Tourism.
-            </h1>
+            <p className="hero-eyebrow">Synthetic hotel onboarding pilot</p>
+            <h1>EthioTour National</h1>
             <p className="hero-subtitle">
-              EthioTour National connects destinations, service providers, and government
-              verification in one coordinated platform for Ethiopian tourism.
+              A private application and review workspace for a controlled synthetic pilot. Pilot
+              outcomes are not licenses or proof of authority to represent a hotel.
             </p>
             <div className="hero-actions">
               <a href={workspaceUrl} className="hero-cta-primary">
@@ -53,11 +49,12 @@ export default function PublicHomePage() {
 
         <section id="platform" className="content-section" aria-labelledby="platform-title">
           <h2 className="section-title" id="platform-title">
-            What EthioTour National provides
+            The current hotel pilot
           </h2>
           <p className="section-lead">
-            A coordinated workflow connecting tourism applicants with the Bureau of Tourism and
-            platform administrators for transparent, structured onboarding.
+            Synthetic applicants, assigned Bureau reviewers, and platform administrators use
+            separate private work areas. Public hotel listings, bookings, and payments are not
+            available in this pilot.
           </p>
           <div className="features-grid">
             <div className="feature-card">
@@ -66,30 +63,29 @@ export default function PublicHomePage() {
               </div>
               <h3>Hotel Onboarding</h3>
               <p>
-                Hotel operators apply through a structured workflow. Applications are reviewed by
-                the Bureau of Tourism and then admitted by a platform administrator before private
-                workspace access is granted.
+                Applicants create private applications and select an applicant-declared location.
+                Submitted versions retain their location and review context.
               </p>
             </div>
             <div className="feature-card">
               <div className="feature-icon feature-icon-amber" aria-hidden="true">
                 🔍
               </div>
-              <h3>Bureau Verification</h3>
+              <h3>Synthetic Bureau Review</h3>
               <p>
-                The Tourism Bureau reviews submitted hotel applications with location-aware routing.
-                Each case is assigned to the responsible office with decision history and version
-                tracking.
+                Server-configured synthetic offices review their assigned application versions.
+                These demo assignments do not establish real office jurisdictions or legal
+                authority.
               </p>
             </div>
             <div className="feature-card">
               <div className="feature-icon feature-icon-teal" aria-hidden="true">
                 📋
               </div>
-              <h3>Destination Registry</h3>
+              <h3>Private Admission</h3>
               <p>
-                Destinations and attractions are managed through a content registry with editorial
-                review, versioning, and a public discovery interface.
+                After approval of the current version, a platform administrator can grant private
+                workspace admission. Admission does not publish a hotel or activate a subscription.
               </p>
             </div>
           </div>
@@ -115,7 +111,10 @@ export default function PublicHomePage() {
               </a>
               <a href={workspaceUrl} className="entry-card" style={{ textDecoration: 'none' }}>
                 <h3>Bureau Officers</h3>
-                <p>Review assigned hotel applications and record verification decisions.</p>
+                <p>
+                  Review assigned synthetic hotel applications and record version-specific
+                  decisions.
+                </p>
                 <span className="entry-card-link">Go to Workspace →</span>
               </a>
               <a href={workspaceUrl} className="entry-card" style={{ textDecoration: 'none' }}>
@@ -134,8 +133,8 @@ export default function PublicHomePage() {
             <div>
               <p className="footer-brand">EthioTour National</p>
               <p className="footer-tagline">
-                A platform for Ethiopian tourism — connecting destinations, service providers, and
-                regulatory workflows.
+                A national tourism project currently demonstrating a private, synthetic hotel
+                onboarding workflow.
               </p>
             </div>
             <div className="footer-col">

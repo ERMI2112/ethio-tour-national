@@ -1,6 +1,17 @@
 export function getWorkspaceUrl(): string {
-  if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_WORKSPACE_URL) {
-    return process.env.NEXT_PUBLIC_WORKSPACE_URL;
+  try {
+    const url = new URL(process.env.NEXT_PUBLIC_WORKSPACE_URL || 'http://localhost:3001');
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^\/*$/.test(url.pathname)
+    )
+      throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error('NEXT_PUBLIC_WORKSPACE_URL must be an HTTP(S) application origin.');
   }
-  return process.env.NEXT_PUBLIC_WORKSPACE_URL || `http://localhost:3001`;
 }

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import WorkspaceHomePage from './page';
-import { AuthProvider } from './lib/auth-context';
+import { AuthProvider, useAuth } from './lib/auth-context';
 import type { AuthenticatedUserSession } from './lib/auth';
 
 const mockAuth = vi.hoisted(() => ({
@@ -47,6 +47,9 @@ function renderWithAuth(session: AuthenticatedUserSession | null) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  mockAuth.startKeycloakSignIn.mockReset().mockResolvedValue(undefined);
+  mockAuth.startKeycloakSignOut.mockReset();
   vi.stubEnv('NEXT_PUBLIC_PUBLIC_URL', 'http://localhost:3000');
   mockAuth.getInMemorySession.mockReturnValue(null);
 });
@@ -54,6 +57,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('workspace portal — signed out', () => {
@@ -126,6 +130,61 @@ describe('workspace portal — signed in', () => {
 });
 
 describe('workspace portal — session transitions', () => {
+  it('replaces identity display immediately when the authenticated session changes', () => {
+    function ChangeSession() {
+      const { setSession } = useAuth();
+      return (
+        <button
+          onClick={() =>
+            setSession(
+              createTestSession({
+                actorKey: 'synthetic-b',
+                displayName: 'Synthetic B',
+                accessToken: 'synthetic-b-token',
+              }),
+            )
+          }
+        >
+          Change session
+        </button>
+      );
+    }
+    render(
+      <AuthProvider initialSession={createTestSession({ displayName: 'Synthetic A' })}>
+        <WorkspaceHomePage />
+        <ChangeSession />
+      </AuthProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Change session' }));
+    expect(screen.queryByText(/Synthetic A/)).toBeNull();
+    expect(screen.getByTestId('session-identity').textContent).toContain('Synthetic B');
+    expect(screen.getByRole('main').textContent).not.toContain('synthetic-b-token');
+  });
+
+  it('clears displayed identity and work-area links on API 401', () => {
+    renderWithAuth(createTestSession());
+    act(() => window.dispatchEvent(new Event('ethio-tour:unauthorized')));
+    expect(screen.queryByTestId('session-identity')).toBeNull();
+    expect(screen.queryByText('Bureau review queue')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('Sign in again');
+  });
+
+  it('signs out through the existing provider and immediately removes identity', () => {
+    renderWithAuth(createTestSession());
+    fireEvent.click(screen.getByRole('button', { name: /sign out/i }));
+    expect(mockAuth.startKeycloakSignOut).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('session-identity')).toBeNull();
+  });
+
+  it('displays sign-in initiation errors without an unhandled rejection', async () => {
+    mockAuth.startKeycloakSignIn.mockRejectedValueOnce(new Error('Synthetic sign-in failure'));
+    renderWithAuth(null);
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe('Synthetic sign-in failure'),
+    );
+  });
+
   it('clears private content when session expires', async () => {
     const session = createTestSession({ expiresAt: Date.now() + 50 });
     renderWithAuth(session);

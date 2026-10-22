@@ -3,13 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { useAuth } from './lib/auth-context';
-
-function getPublicUrl(): string {
-  if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_PUBLIC_URL) {
-    return process.env.NEXT_PUBLIC_PUBLIC_URL;
-  }
-  return process.env.NEXT_PUBLIC_PUBLIC_URL || 'http://localhost:3000';
-}
+import { getPublicUrl } from './portal-config';
 
 export default function WorkspaceHomePage() {
   const { session, isAuthenticated, error, signIn, signOut } = useAuth();
@@ -55,7 +49,7 @@ export default function WorkspaceHomePage() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => void signOut()}
+                  onClick={() => void signOut().catch(() => {})}
                   className="secondary-button"
                   style={{ minHeight: '34px', padding: '4px 10px', fontSize: '0.8rem' }}
                   aria-label="Sign out of workspace"
@@ -80,12 +74,13 @@ export default function WorkspaceHomePage() {
             <h2 id="sign-in-title">Sign in to continue</h2>
             <p>
               The EthioTour workspace requires authentication. Sign in with your identity provider
-              to access hotel applications, Bureau review, and administration tools.
+              to access hotel applications, Bureau review, and administration tools. Access to each
+              work area depends on permissions checked by the server.
             </p>
             <div style={{ marginTop: '16px' }}>
               <button
                 type="button"
-                onClick={() => void signIn()}
+                onClick={() => void signIn().catch(() => {})}
                 aria-label="Sign in with Keycloak"
               >
                 Sign In
