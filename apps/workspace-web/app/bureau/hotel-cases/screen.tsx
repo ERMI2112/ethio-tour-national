@@ -26,29 +26,44 @@ export function BureauHotelCasesScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeToken, setNoticeToken] = useState<string | null>(null);
   const [submittingCaseId, setSubmittingCaseId] = useState<string | null>(null);
+  const [casesToken, setCasesToken] = useState<string | null>(null);
+  const [loadingToken, setLoadingToken] = useState<string | null>(null);
+  const [errorToken, setErrorToken] = useState<string | null>(null);
   const requestSequence = useRef(0);
+  const currentToken = useRef(accessToken);
+  const submissionInFlight = useRef(false);
 
   const reload = useCallback(async () => {
-    if (!accessToken) return;
+    const requestToken = accessToken;
+    if (!requestToken) return false;
     const thisSequence = ++requestSequence.current;
+    setLoadingToken(requestToken);
     setLoading(true);
     setError(null);
+    setErrorToken(requestToken);
     try {
-      const response = await getBureauHotelCases({ accessToken });
-      if (thisSequence !== requestSequence.current) return;
+      const response = await getBureauHotelCases({ accessToken: requestToken });
+      if (thisSequence !== requestSequence.current || currentToken.current !== requestToken)
+        return false;
       setCases(response.items);
+      setCasesToken(requestToken);
+      return true;
     } catch (requestError) {
-      if (thisSequence !== requestSequence.current) return;
+      if (thisSequence !== requestSequence.current || currentToken.current !== requestToken)
+        return false;
       if (
         requestError instanceof ApiClientError &&
         (requestError.status === 401 || requestError.status === 403)
       ) {
         setCases([]);
+        setCasesToken(requestToken);
       }
       setError(describeApiFailure(requestError, 'loading the assigned Bureau queue'));
+      return false;
     } finally {
-      if (thisSequence === requestSequence.current) {
+      if (thisSequence === requestSequence.current && currentToken.current === requestToken) {
         setLoading(false);
       }
     }
@@ -56,14 +71,18 @@ export function BureauHotelCasesScreen() {
 
   // Session handling: clear private cases when session ends
   useEffect(() => {
+    currentToken.current = accessToken;
+    requestSequence.current++;
+    setCases([]);
+    setCasesToken(null);
+    setError(null);
+    setErrorToken(null);
+    setNotice(null);
+    setNoticeToken(null);
     if (!accessToken) {
-      requestSequence.current++;
-      setCases([]);
-      setError(null);
-      setNotice(null);
-    } else {
-      void reload();
+      return;
     }
+    void reload();
   }, [accessToken, reload]);
 
   // Session handling: clear private cases when unauthorized event is received
@@ -71,7 +90,9 @@ export function BureauHotelCasesScreen() {
     const handleUnauthorized = () => {
       requestSequence.current++;
       setCases([]);
+      setCasesToken(null);
       setError('Your authenticated session is missing or has expired.');
+      setErrorToken(currentToken.current);
     };
     if (typeof window !== 'undefined') {
       window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
@@ -83,24 +104,36 @@ export function BureauHotelCasesScreen() {
     caseId: string,
     request: { expectedVersion: number; decision: HotelApplicationDecision; reason: string },
   ) {
-    if (!accessToken || submittingCaseId !== null) return;
+    const requestToken = accessToken;
+    if (!requestToken || submissionInFlight.current) return;
+    submissionInFlight.current = true;
     setSubmittingCaseId(caseId);
     try {
-      await decideHotelApplication(caseId, request, { accessToken });
+      await decideHotelApplication(caseId, request, { accessToken: requestToken });
+      if (currentToken.current !== requestToken) return;
       setCases((current) => current.filter((caseItem) => caseItem.caseId !== caseId));
       setNotice('The API accepted the decision. The assigned queue is refreshing.');
+      setNoticeToken(requestToken);
       await reload();
     } catch (err) {
-      if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
-        setCases([]);
+      if (currentToken.current === requestToken) {
+        if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
+          setCases([]);
+          setCasesToken(requestToken);
+        }
+        throw err;
       }
-      throw err;
     } finally {
+      submissionInFlight.current = false;
       setSubmittingCaseId(null);
     }
   }
 
-  const isQueueBusy = loading || submittingCaseId !== null;
+  const isQueueLoading = Boolean(accessToken) && (loadingToken !== accessToken || loading);
+  const visibleCases = casesToken === accessToken ? cases : [];
+  const visibleError = errorToken === accessToken ? error : null;
+  const visibleNotice = noticeToken === accessToken ? notice : null;
+  const isQueueBusy = isQueueLoading || submittingCaseId !== null;
 
   return (
     <HotelPilotFrame
@@ -120,29 +153,29 @@ export function BureauHotelCasesScreen() {
               type="button"
               onClick={() => void reload()}
               disabled={isQueueBusy}
-              aria-busy={loading ? 'true' : undefined}
+              aria-busy={isQueueLoading ? 'true' : undefined}
             >
               Refresh queue
             </button>
           </div>
-          {loading && <LoadingState label="Loading assigned cases…" />}
-          {error && (
+          {isQueueLoading && <LoadingState label="Loading assigned cases…" />}
+          {visibleError && (
             <p className="error-message" role="alert">
-              {error}
+              {visibleError}
             </p>
           )}
-          {notice && (
+          {visibleNotice && (
             <p className="success-message" role="status">
-              {notice}
+              {visibleNotice}
             </p>
           )}
-          {!loading && cases.length === 0 && !error && (
+          {!isQueueLoading && visibleCases.length === 0 && !visibleError && (
             <p className="empty-state">No cases were returned for this account and scope.</p>
           )}
           <div className="card-stack">
-            {cases.map((caseItem) => (
+            {visibleCases.map((caseItem) => (
               <BureauCaseCard
-                key={caseItem.caseId}
+                key={`${accessToken}:${caseItem.caseId}`}
                 caseItem={caseItem}
                 onDecide={decide}
                 onRefresh={reload}
@@ -167,7 +200,7 @@ function BureauCaseCard({
     caseId: string,
     request: { expectedVersion: number; decision: HotelApplicationDecision; reason: string },
   ) => Promise<void>;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<boolean>;
   isQueueBusy: boolean;
 }>) {
   const [decision, setDecision] = useState<HotelApplicationDecision | ''>('');
@@ -175,17 +208,27 @@ function BureauCaseCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isConflict, setIsConflict] = useState(false);
+  const [requiresRenewedReview, setRequiresRenewedReview] = useState(false);
+  const [confirmedReasonVersion, setConfirmedReasonVersion] = useState<number | null>(null);
+  const submissionInFlight = useRef(false);
 
   const trimmedReason = reason.trim();
   const reasonLength = trimmedReason.length;
   const isReasonValid = isDecisionReasonValid(reason);
   const isReasonTooLong = reason.length > MAX_DECISION_REASON_LENGTH;
-  const canSubmit = Boolean(decision) && isReasonValid && !busy && !isQueueBusy;
+  const canSubmit =
+    Boolean(decision) &&
+    isReasonValid &&
+    !busy &&
+    !isQueueBusy &&
+    !isConflict &&
+    (!requiresRenewedReview || confirmedReasonVersion === caseItem.currentVersion);
   const locationSummary = formatLocationHierarchy(caseItem.submittedLocation);
 
   async function submit(event?: React.FormEvent<HTMLFormElement>) {
     if (event) event.preventDefault();
-    if (!decision || !canSubmit) return;
+    if (submissionInFlight.current || !decision || !canSubmit) return;
+    submissionInFlight.current = true;
     setBusy(true);
     setError(null);
     setIsConflict(false);
@@ -198,6 +241,9 @@ function BureauCaseCard({
     } catch (requestError) {
       if (requestError instanceof ApiClientError && requestError.status === 409) {
         setIsConflict(true);
+        setRequiresRenewedReview(true);
+        setConfirmedReasonVersion(null);
+        setDecision('');
         setError(
           'Application version conflict: The application record changed or a newer version was submitted. Your entered reason has been preserved. Refresh the list to review the current version before trying again.',
         );
@@ -205,14 +251,18 @@ function BureauCaseCard({
         setError(describeApiFailure(requestError, 'recording the Bureau decision'));
       }
     } finally {
+      submissionInFlight.current = false;
       setBusy(false);
     }
   }
 
   async function handleRefresh() {
+    const refreshed = await onRefresh();
+    if (!refreshed) return;
     setError(null);
     setIsConflict(false);
-    await onRefresh();
+    setDecision('');
+    setConfirmedReasonVersion(null);
   }
 
   return (
@@ -290,6 +340,7 @@ function BureauCaseCard({
               value={reason}
               onChange={(event) => {
                 setReason(event.target.value);
+                if (requiresRenewedReview) setConfirmedReasonVersion(null);
                 if (error && !isConflict) setError(null);
               }}
               onKeyDown={(event) => {
@@ -311,6 +362,18 @@ function BureauCaseCard({
               </span>
             </div>
           </div>
+          {requiresRenewedReview && !isConflict && (
+            <label className="decision-review-confirmation">
+              <input
+                type="checkbox"
+                checked={confirmedReasonVersion === caseItem.currentVersion}
+                onChange={(event) =>
+                  setConfirmedReasonVersion(event.target.checked ? caseItem.currentVersion : null)
+                }
+              />
+              I reviewed version {caseItem.currentVersion} and confirm the preserved reason applies.
+            </label>
+          )}
           {error && (
             <div className="error-container">
               <p id={`reason-error-${caseItem.caseId}`} className="error-message" role="alert">

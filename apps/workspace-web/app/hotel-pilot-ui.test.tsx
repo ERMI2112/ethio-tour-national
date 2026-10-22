@@ -662,7 +662,7 @@ describe('hotel location selection, snapshots, and error retention', () => {
   });
 
   it.each(['bureau', 'admin'])(
-    'retains %s decision and reason when recording fails',
+    'preserves the %s reason but requires renewed action after a 409',
     async (actor) => {
       mockApiClient.getBureauHotelCases.mockResolvedValueOnce({ items: [mockBureauCase()] });
       mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({ items: [mockApplication()] });
@@ -688,8 +688,16 @@ describe('hotel location selection, snapshots, and error retention', () => {
       await waitFor(() =>
         expect(screen.getByRole('alert').textContent).toContain('Refresh the list'),
       );
-      expect(decision.value).toBe(actor === 'bureau' ? 'approve' : 'admit');
+      expect(decision.value).toBe('');
       expect((screen.getByLabelText('Reason') as HTMLTextAreaElement).value).toBe('Keep my reason');
+      expect(
+        screen
+          .getByRole('button', {
+            name:
+              actor === 'bureau' ? 'Record Bureau decision' : 'Record private admission decision',
+          })
+          .hasAttribute('disabled'),
+      ).toBe(true);
     },
   );
 });

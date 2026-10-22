@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { HotelApplicationResponse, HotelBureauCaseResponse } from './lib/hotel-pilot-ui-state';
 import { BureauHotelCasesScreen } from './bureau/hotel-cases/screen';
 import { AdminHotelAdmissionsScreen } from './admin/hotel-admissions/screen';
@@ -139,6 +139,72 @@ describe('Bureau and Administrator screens usability & reliability', () => {
   });
 
   describe('1. Duplicate decision submission prevention', () => {
+    it('blocks rapid keyboard and click submissions before React renders the busy state', async () => {
+      let resolveDecision: (val: unknown) => void = () => {};
+      mockApiClient.getBureauHotelCases.mockResolvedValueOnce({ items: [mockBureauCase()] });
+      mockApiClient.decideHotelApplication.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveDecision = resolve;
+        }),
+      );
+      render(
+        <HotelPilotSessionProvider accessToken={token}>
+          <BureauHotelCasesScreen />
+        </HotelPilotSessionProvider>,
+      );
+      const reason = (await screen.findByLabelText('Reason')) as HTMLTextAreaElement;
+      fireEvent.change(screen.getByLabelText('Decision for this submitted version'), {
+        target: { value: 'approve' },
+      });
+      fireEvent.change(reason, { target: { value: 'Reason for this decision.' } });
+      const button = screen.getByRole('button', { name: 'Record Bureau decision' });
+
+      act(() => {
+        fireEvent.keyDown(reason, { key: 'Enter', ctrlKey: true });
+        fireEvent.click(button);
+      });
+      expect(mockApiClient.decideHotelApplication).toHaveBeenCalledTimes(1);
+
+      mockApiClient.getBureauHotelCases.mockResolvedValueOnce({ items: [] });
+      await act(async () => {
+        resolveDecision(mockBureauCase({ status: 'approved', caseStatus: 'approved' }));
+      });
+    });
+
+    it('blocks rapid Administrator keyboard and click submissions before rerender', async () => {
+      let resolveDecision: (val: unknown) => void = () => {};
+      mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({
+        items: [mockAdminApplication()],
+      });
+      mockApiClient.decideHotelAdmission.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveDecision = resolve;
+        }),
+      );
+      render(
+        <HotelPilotSessionProvider accessToken={token}>
+          <AdminHotelAdmissionsScreen />
+        </HotelPilotSessionProvider>,
+      );
+      const reason = (await screen.findByLabelText('Reason')) as HTMLTextAreaElement;
+      fireEvent.change(screen.getByLabelText('Private platform admission decision'), {
+        target: { value: 'admit' },
+      });
+      fireEvent.change(reason, { target: { value: 'Reason for admission.' } });
+      const button = screen.getByRole('button', { name: 'Record private admission decision' });
+
+      act(() => {
+        fireEvent.keyDown(reason, { key: 'Enter', metaKey: true });
+        fireEvent.click(button);
+      });
+      expect(mockApiClient.decideHotelAdmission).toHaveBeenCalledTimes(1);
+
+      mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({ items: [] });
+      await act(async () => {
+        resolveDecision(mockAdminApplication({ admissionStatus: 'admitted' }));
+      });
+    });
+
     it('disables submit button and form controls on Bureau screen while decision is in-flight', async () => {
       let resolveDecision: (val: unknown) => void = () => {};
       const pendingPromise = new Promise((res) => {
@@ -310,10 +376,58 @@ describe('Bureau and Administrator screens usability & reliability', () => {
         );
       });
     });
+
+    it.each(['approve', 'request_changes', 'reject'] as const)(
+      'requires the backend decision reason for Bureau outcome %s',
+      async (decision) => {
+        mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
+          items: [mockBureauCase()],
+        });
+        render(
+          <HotelPilotSessionProvider accessToken={token}>
+            <BureauHotelCasesScreen />
+          </HotelPilotSessionProvider>,
+        );
+        const select = await screen.findByLabelText('Decision for this submitted version');
+        const reason = screen.getByLabelText('Reason');
+        const button = screen.getByRole('button', { name: 'Record Bureau decision' });
+        fireEvent.change(select, { target: { value: decision } });
+        fireEvent.change(reason, { target: { value: '   ' } });
+        expect(button.hasAttribute('disabled')).toBe(true);
+        fireEvent.change(reason, { target: { value: '  Decision reason.  ' } });
+        expect(button.hasAttribute('disabled')).toBe(false);
+        expect(reason.getAttribute('maxLength')).toBe('1000');
+      },
+    );
+
+    it.each(['admit', 'decline'] as const)(
+      'requires the backend decision reason for Administrator outcome %s',
+      async (decision) => {
+        mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({
+          items: [mockAdminApplication()],
+        });
+        render(
+          <HotelPilotSessionProvider accessToken={token}>
+            <AdminHotelAdmissionsScreen />
+          </HotelPilotSessionProvider>,
+        );
+        const select = await screen.findByLabelText('Private platform admission decision');
+        const reason = screen.getByLabelText('Reason');
+        const button = screen.getByRole('button', {
+          name: 'Record private admission decision',
+        });
+        fireEvent.change(select, { target: { value: decision } });
+        fireEvent.change(reason, { target: { value: '   ' } });
+        expect(button.hasAttribute('disabled')).toBe(true);
+        fireEvent.change(reason, { target: { value: '  Decision reason.  ' } });
+        expect(button.hasAttribute('disabled')).toBe(false);
+        expect(reason.getAttribute('maxLength')).toBe('1000');
+      },
+    );
   });
 
   describe('3. Stale-version conflict handling with preserved reason and explicit refresh', () => {
-    it('preserves entered reason on Bureau 409 conflict, displays conflict alert, and allows refresh', async () => {
+    it('requires a successful refresh and renewed version/reason confirmation after Bureau 409', async () => {
       const { ApiClientError } = await import('@ethio-tour/api-client');
 
       mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
@@ -348,28 +462,47 @@ describe('Bureau and Administrator screens usability & reliability', () => {
       expect(alert.textContent).toContain('Your entered reason has been preserved');
       expect(alert.textContent).toContain('Refresh the list');
 
-      // Reason and decision are strictly preserved in the form
+      // Preserve the reason, but discard the old outcome.
       expect(reasonInput.value).toBe('Missing fire safety inspection certificate.');
-      expect(select.value).toBe('reject');
+      expect(select.value).toBe('');
+      expect(submitBtn.hasAttribute('disabled')).toBe(true);
 
       // Explicit refresh button is rendered
       const refreshCaseBtn = screen.getByRole('button', { name: 'Refresh case' });
       expect(refreshCaseBtn).toBeDefined();
 
-      // Refreshing reloads the queue
+      // A failed explicit refresh does not clear the conflict gate.
+      mockApiClient.getBureauHotelCases.mockRejectedValueOnce(new Error('offline'));
+      fireEvent.click(refreshCaseBtn);
+      await waitFor(() => expect(mockApiClient.getBureauHotelCases).toHaveBeenCalledTimes(2));
+      expect(
+        screen
+          .getAllByRole('alert')
+          .some((alert) => alert.textContent?.includes('Application version conflict')),
+      ).toBe(true);
+      expect(screen.getByRole('button', { name: 'Refresh case' })).toBeDefined();
+      expect(submitBtn.hasAttribute('disabled')).toBe(true);
+
+      // Only a successful refresh permits a fresh decision on version 3.
       const updatedCase = mockBureauCase({ currentVersion: 3, version: 3 });
       mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
         items: [updatedCase],
       });
 
-      fireEvent.click(refreshCaseBtn);
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh case' }));
 
       await waitFor(() => {
-        expect(mockApiClient.getBureauHotelCases).toHaveBeenCalledTimes(2);
+        expect(mockApiClient.getBureauHotelCases).toHaveBeenCalledTimes(3);
       });
 
-      // After refresh, the preserved reason is still in the form and can be submitted with updated version 3
       expect(reasonInput.value).toBe('Missing fire safety inspection certificate.');
+      expect(select.value).toBe('');
+      expect(submitBtn.hasAttribute('disabled')).toBe(true);
+      fireEvent.change(select, { target: { value: 'reject' } });
+      fireEvent.click(
+        screen.getByLabelText('I reviewed version 3 and confirm the preserved reason applies.'),
+      );
+      expect(submitBtn.hasAttribute('disabled')).toBe(false);
       mockApiClient.decideHotelApplication.mockResolvedValueOnce(updatedCase);
       mockApiClient.getBureauHotelCases.mockResolvedValueOnce({ items: [] });
 
@@ -388,7 +521,7 @@ describe('Bureau and Administrator screens usability & reliability', () => {
       });
     });
 
-    it('preserves entered reason on Administrator 409 conflict and provides explicit refresh', async () => {
+    it('requires a successful refresh and renewed version/reason confirmation after Administrator 409', async () => {
       const { ApiClientError } = await import('@ethio-tour/api-client');
 
       mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({
@@ -422,15 +555,25 @@ describe('Bureau and Administrator screens usability & reliability', () => {
       expect(alert.textContent).toContain('Application version conflict');
       expect(alert.textContent).toContain('Your entered reason has been preserved');
 
-      // Reason and decision are preserved
+      // Preserve the reason but require a fresh decision after refresh.
       expect(reasonInput.value).toBe('Carefully reviewed commercial license.');
-      expect(select.value).toBe('admit');
+      expect(select.value).toBe('');
+      expect(submitBtn.hasAttribute('disabled')).toBe(true);
 
       // Explicit refresh button
       const refreshAppBtn = screen.getByRole('button', { name: 'Refresh application' });
       expect(refreshAppBtn).toBeDefined();
 
-      const updatedApp = mockAdminApplication({ currentVersion: 4, version: 5 });
+      const updatedApp = mockAdminApplication({
+        currentVersion: 4,
+        version: 5,
+        bureauDecision: {
+          decision: 'approve',
+          applicationVersion: 4,
+          reason: 'Current Bureau approval.',
+          decidedAt: '2026-10-21T10:00:00.000Z',
+        },
+      });
       mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({
         items: [updatedApp],
       });
@@ -442,6 +585,28 @@ describe('Bureau and Administrator screens usability & reliability', () => {
       });
 
       expect(reasonInput.value).toBe('Carefully reviewed commercial license.');
+      expect(select.value).toBe('');
+      expect(submitBtn.hasAttribute('disabled')).toBe(true);
+      fireEvent.change(select, { target: { value: 'admit' } });
+      fireEvent.click(
+        screen.getByLabelText('I reviewed version 4 and confirm the preserved reason applies.'),
+      );
+      expect(submitBtn.hasAttribute('disabled')).toBe(false);
+      mockApiClient.decideHotelAdmission.mockResolvedValueOnce(updatedApp);
+      mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({ items: [] });
+      fireEvent.click(submitBtn);
+      await waitFor(() => {
+        expect(mockApiClient.decideHotelAdmission).toHaveBeenCalledTimes(2);
+        expect(mockApiClient.decideHotelAdmission).toHaveBeenLastCalledWith(
+          'app-admin-1',
+          {
+            expectedVersion: 5,
+            decision: 'admit',
+            reason: 'Carefully reviewed commercial license.',
+          },
+          { accessToken: token },
+        );
+      });
     });
   });
 
@@ -490,6 +655,147 @@ describe('Bureau and Administrator screens usability & reliability', () => {
         expect(screen.queryByText('Case · application version 1')).toBeNull();
         expect(screen.getByText('Case · application version 5')).toBeDefined();
       });
+    });
+
+    it('hides reviewer A rows immediately when reviewer B starts loading and keeps them hidden on 403', async () => {
+      const { ApiClientError } = await import('@ethio-tour/api-client');
+      let rejectReviewerB: (error: unknown) => void = () => {};
+      mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
+        items: [
+          mockBureauCase({
+            content: { claimedHotelName: 'Reviewer A private hotel', applicantNotes: '' },
+          }),
+        ],
+      });
+      const { rerender } = render(
+        <HotelPilotSessionProvider accessToken="reviewer-A-token">
+          <BureauHotelCasesScreen />
+        </HotelPilotSessionProvider>,
+      );
+      await screen.findByText('Reviewer A private hotel');
+
+      mockApiClient.getBureauHotelCases.mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectReviewerB = reject;
+        }),
+      );
+      rerender(
+        <HotelPilotSessionProvider accessToken="reviewer-B-token">
+          <BureauHotelCasesScreen />
+        </HotelPilotSessionProvider>,
+      );
+      expect(screen.queryByText('Reviewer A private hotel')).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('Loading assigned cases');
+
+      await waitFor(() => expect(mockApiClient.getBureauHotelCases).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        rejectReviewerB(new ApiClientError('Forbidden', 403, 'forbidden'));
+      });
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('not permitted'));
+      expect(screen.queryByText('Reviewer A private hotel')).toBeNull();
+    });
+
+    it('does not let a queue request started under reviewer A restore rows after switching to B', async () => {
+      let resolveOldReviewerA: (value: unknown) => void = () => {};
+      let resolveReviewerB: (value: unknown) => void = () => {};
+      mockApiClient.getBureauHotelCases.mockResolvedValueOnce({
+        items: [
+          mockBureauCase({
+            content: { claimedHotelName: 'Reviewer A existing row', applicantNotes: '' },
+          }),
+        ],
+      });
+      const { rerender } = render(
+        <HotelPilotSessionProvider accessToken="reviewer-A-token">
+          <BureauHotelCasesScreen />
+        </HotelPilotSessionProvider>,
+      );
+      await screen.findByText('Reviewer A existing row');
+
+      mockApiClient.getBureauHotelCases.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOldReviewerA = resolve;
+        }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh queue' }));
+      await waitFor(() => expect(mockApiClient.getBureauHotelCases).toHaveBeenCalledTimes(2));
+
+      mockApiClient.getBureauHotelCases.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveReviewerB = resolve;
+        }),
+      );
+      rerender(
+        <HotelPilotSessionProvider accessToken="reviewer-B-token">
+          <BureauHotelCasesScreen />
+        </HotelPilotSessionProvider>,
+      );
+      expect(screen.queryByText('Reviewer A existing row')).toBeNull();
+      await waitFor(() => expect(mockApiClient.getBureauHotelCases).toHaveBeenCalledTimes(3));
+
+      await act(async () => {
+        resolveReviewerB({
+          items: [
+            mockBureauCase({
+              caseId: 'case-B',
+              content: { claimedHotelName: 'Reviewer B row', applicantNotes: '' },
+            }),
+          ],
+        });
+      });
+      await screen.findByText('Reviewer B row');
+      await act(async () => {
+        resolveOldReviewerA({
+          items: [
+            mockBureauCase({
+              caseId: 'case-A-late',
+              content: { claimedHotelName: 'Late A row', applicantNotes: '' },
+            }),
+          ],
+        });
+      });
+      expect(screen.getByText('Reviewer B row')).toBeDefined();
+      expect(screen.queryByText('Late A row')).toBeNull();
+    });
+
+    it('hides Administrator A rows immediately and leaves them hidden when Administrator B gets 403', async () => {
+      const { ApiClientError } = await import('@ethio-tour/api-client');
+      let rejectAdministratorB: (error: unknown) => void = () => {};
+      mockApiClient.getHotelAdmissionQueue.mockResolvedValueOnce({
+        items: [
+          mockAdminApplication({
+            content: {
+              claimedHotelName: 'Administrator A private hotel',
+              applicantNotes: '',
+            },
+          }),
+        ],
+      });
+      const { rerender } = render(
+        <HotelPilotSessionProvider accessToken="administrator-A-token">
+          <AdminHotelAdmissionsScreen />
+        </HotelPilotSessionProvider>,
+      );
+      await screen.findByText('Administrator A private hotel');
+
+      mockApiClient.getHotelAdmissionQueue.mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectAdministratorB = reject;
+        }),
+      );
+      rerender(
+        <HotelPilotSessionProvider accessToken="administrator-B-token">
+          <AdminHotelAdmissionsScreen />
+        </HotelPilotSessionProvider>,
+      );
+      expect(screen.queryByText('Administrator A private hotel')).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('Loading eligible applications');
+      await waitFor(() => expect(mockApiClient.getHotelAdmissionQueue).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        rejectAdministratorB(new ApiClientError('Forbidden', 403, 'forbidden'));
+      });
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('not permitted'));
+      expect(screen.queryByText('Administrator A private hotel')).toBeNull();
     });
   });
 

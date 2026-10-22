@@ -26,29 +26,44 @@ export function AdminHotelAdmissionsScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeToken, setNoticeToken] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const [applicationsToken, setApplicationsToken] = useState<string | null>(null);
+  const [loadingToken, setLoadingToken] = useState<string | null>(null);
+  const [errorToken, setErrorToken] = useState<string | null>(null);
   const requestSequence = useRef(0);
+  const currentToken = useRef(accessToken);
+  const submissionInFlight = useRef(false);
 
   const reload = useCallback(async () => {
-    if (!accessToken) return;
+    const requestToken = accessToken;
+    if (!requestToken) return false;
     const thisSequence = ++requestSequence.current;
+    setLoadingToken(requestToken);
     setLoading(true);
     setError(null);
+    setErrorToken(requestToken);
     try {
-      const response = await getHotelAdmissionQueue({ accessToken });
-      if (thisSequence !== requestSequence.current) return;
+      const response = await getHotelAdmissionQueue({ accessToken: requestToken });
+      if (thisSequence !== requestSequence.current || currentToken.current !== requestToken)
+        return false;
       setApplications(response.items);
+      setApplicationsToken(requestToken);
+      return true;
     } catch (requestError) {
-      if (thisSequence !== requestSequence.current) return;
+      if (thisSequence !== requestSequence.current || currentToken.current !== requestToken)
+        return false;
       if (
         requestError instanceof ApiClientError &&
         (requestError.status === 401 || requestError.status === 403)
       ) {
         setApplications([]);
+        setApplicationsToken(requestToken);
       }
       setError(describeApiFailure(requestError, 'loading the admission queue'));
+      return false;
     } finally {
-      if (thisSequence === requestSequence.current) {
+      if (thisSequence === requestSequence.current && currentToken.current === requestToken) {
         setLoading(false);
       }
     }
@@ -56,14 +71,18 @@ export function AdminHotelAdmissionsScreen() {
 
   // Session handling: clear private applications when session ends
   useEffect(() => {
+    currentToken.current = accessToken;
+    requestSequence.current++;
+    setApplications([]);
+    setApplicationsToken(null);
+    setError(null);
+    setErrorToken(null);
+    setNotice(null);
+    setNoticeToken(null);
     if (!accessToken) {
-      requestSequence.current++;
-      setApplications([]);
-      setError(null);
-      setNotice(null);
-    } else {
-      void reload();
+      return;
     }
+    void reload();
   }, [accessToken, reload]);
 
   // Session handling: clear private applications when unauthorized event is received
@@ -71,7 +90,9 @@ export function AdminHotelAdmissionsScreen() {
     const handleUnauthorized = () => {
       requestSequence.current++;
       setApplications([]);
+      setApplicationsToken(null);
       setError('Your authenticated session is missing or has expired.');
+      setErrorToken(currentToken.current);
     };
     if (typeof window !== 'undefined') {
       window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
@@ -83,26 +104,40 @@ export function AdminHotelAdmissionsScreen() {
     applicationId: string,
     request: { expectedVersion: number; decision: HotelAdmissionDecision; reason: string },
   ) {
-    if (!accessToken || submittingId !== null) return;
+    const requestToken = accessToken;
+    if (!requestToken || submissionInFlight.current) return;
+    submissionInFlight.current = true;
     setSubmittingId(applicationId);
     try {
-      const updated = await decideHotelAdmission(applicationId, request, { accessToken });
+      const updated = await decideHotelAdmission(applicationId, request, {
+        accessToken: requestToken,
+      });
+      if (currentToken.current !== requestToken) return;
       setApplications((current) =>
         current.map((application) => (application.id === updated.id ? updated : application)),
       );
       setNotice('The API accepted the admission decision. The queue is refreshing.');
+      setNoticeToken(requestToken);
       await reload();
     } catch (err) {
-      if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
-        setApplications([]);
+      if (currentToken.current === requestToken) {
+        if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
+          setApplications([]);
+          setApplicationsToken(requestToken);
+        }
+        throw err;
       }
-      throw err;
     } finally {
+      submissionInFlight.current = false;
       setSubmittingId(null);
     }
   }
 
-  const isQueueBusy = loading || submittingId !== null;
+  const isQueueLoading = Boolean(accessToken) && (loadingToken !== accessToken || loading);
+  const visibleApplications = applicationsToken === accessToken ? applications : [];
+  const visibleError = errorToken === accessToken ? error : null;
+  const visibleNotice = noticeToken === accessToken ? notice : null;
+  const isQueueBusy = isQueueLoading || submittingId !== null;
 
   return (
     <HotelPilotFrame
@@ -122,7 +157,7 @@ export function AdminHotelAdmissionsScreen() {
               type="button"
               onClick={() => void reload()}
               disabled={isQueueBusy}
-              aria-busy={loading ? 'true' : undefined}
+              aria-busy={isQueueLoading ? 'true' : undefined}
             >
               Refresh queue
             </button>
@@ -131,24 +166,24 @@ export function AdminHotelAdmissionsScreen() {
             Admission here does not activate a paid subscription, payment, public listing, or
             booking.
           </p>
-          {loading && <LoadingState label="Loading eligible applications…" />}
-          {error && (
+          {isQueueLoading && <LoadingState label="Loading eligible applications…" />}
+          {visibleError && (
             <p className="error-message" role="alert">
-              {error}
+              {visibleError}
             </p>
           )}
-          {notice && (
+          {visibleNotice && (
             <p className="success-message" role="status">
-              {notice}
+              {visibleNotice}
             </p>
           )}
-          {!loading && applications.length === 0 && !error && (
+          {!isQueueLoading && visibleApplications.length === 0 && !visibleError && (
             <p className="empty-state">No eligible applications were returned by the API.</p>
           )}
           <div className="card-stack">
-            {applications.map((application) => (
+            {visibleApplications.map((application) => (
               <AdmissionApplicationCard
-                key={application.id}
+                key={`${accessToken}:${application.id}`}
                 application={application}
                 onDecide={decide}
                 onRefresh={reload}
@@ -173,7 +208,7 @@ function AdmissionApplicationCard({
     applicationId: string,
     request: { expectedVersion: number; decision: HotelAdmissionDecision; reason: string },
   ) => Promise<void>;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<boolean>;
   isQueueBusy: boolean;
 }>) {
   const [decision, setDecision] = useState<HotelAdmissionDecision | ''>('');
@@ -181,18 +216,29 @@ function AdmissionApplicationCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isConflict, setIsConflict] = useState(false);
+  const [requiresRenewedReview, setRequiresRenewedReview] = useState(false);
+  const [confirmedReasonVersion, setConfirmedReasonVersion] = useState<number | null>(null);
+  const submissionInFlight = useRef(false);
   const eligible = canDecideHotelAdmission(application);
 
   const trimmedReason = reason.trim();
   const reasonLength = trimmedReason.length;
   const isReasonValid = isDecisionReasonValid(reason);
   const isReasonTooLong = reason.length > MAX_DECISION_REASON_LENGTH;
-  const canSubmit = Boolean(decision) && isReasonValid && !busy && !isQueueBusy && eligible;
+  const canSubmit =
+    Boolean(decision) &&
+    isReasonValid &&
+    !busy &&
+    !isQueueBusy &&
+    !isConflict &&
+    (!requiresRenewedReview || confirmedReasonVersion === application.currentVersion) &&
+    eligible;
   const locationSummary = formatLocationHierarchy(application.location);
 
   async function submit(event?: React.FormEvent<HTMLFormElement>) {
     if (event) event.preventDefault();
-    if (!decision || !canSubmit) return;
+    if (submissionInFlight.current || !decision || !canSubmit) return;
+    submissionInFlight.current = true;
     setBusy(true);
     setError(null);
     setIsConflict(false);
@@ -205,6 +251,9 @@ function AdmissionApplicationCard({
     } catch (requestError) {
       if (requestError instanceof ApiClientError && requestError.status === 409) {
         setIsConflict(true);
+        setRequiresRenewedReview(true);
+        setConfirmedReasonVersion(null);
+        setDecision('');
         setError(
           'Application version conflict: The application record changed or a newer version was submitted. Your entered reason has been preserved. Refresh the list to review the current version before trying again.',
         );
@@ -212,14 +261,18 @@ function AdmissionApplicationCard({
         setError(describeApiFailure(requestError, 'recording the Administrator decision'));
       }
     } finally {
+      submissionInFlight.current = false;
       setBusy(false);
     }
   }
 
   async function handleRefresh() {
+    const refreshed = await onRefresh();
+    if (!refreshed) return;
     setError(null);
     setIsConflict(false);
-    await onRefresh();
+    setDecision('');
+    setConfirmedReasonVersion(null);
   }
 
   return (
@@ -305,6 +358,7 @@ function AdmissionApplicationCard({
               value={reason}
               onChange={(event) => {
                 setReason(event.target.value);
+                if (requiresRenewedReview) setConfirmedReasonVersion(null);
                 if (error && !isConflict) setError(null);
               }}
               onKeyDown={(event) => {
@@ -326,6 +380,21 @@ function AdmissionApplicationCard({
               </span>
             </div>
           </div>
+          {requiresRenewedReview && !isConflict && (
+            <label className="decision-review-confirmation">
+              <input
+                type="checkbox"
+                checked={confirmedReasonVersion === application.currentVersion}
+                onChange={(event) =>
+                  setConfirmedReasonVersion(
+                    event.target.checked ? application.currentVersion : null,
+                  )
+                }
+              />
+              I reviewed version {application.currentVersion} and confirm the preserved reason
+              applies.
+            </label>
+          )}
           {error && (
             <div className="error-container">
               <p id={`admin-reason-error-${application.id}`} className="error-message" role="alert">

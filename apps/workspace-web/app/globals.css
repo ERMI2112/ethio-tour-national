@@ -250,6 +250,21 @@ main {
   margin-top: 0.2rem;
 }
 
+.decision-review-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  font-weight: 600;
+}
+
+.decision-review-confirmation input {
+  width: auto;
+  min-height: auto;
+  margin-top: 0.2rem;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
 .field-hint {
   color: #52615a;
   font-size: 0.8rem;
