@@ -597,7 +597,7 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     expect(scopes.every((scope) => scope.hotel_geography_release_id === b.geography.id)).toBe(true);
   });
 
-  it('allows an explicitly narrower scope within the configured Bureau route', async () => {
+  it('rejects a contained scope that cannot authorize any routed case', async () => {
     const f = await fixture((pair) => {
       const rule = pair.routing.rules[0]!;
       let routeScope = pair.geography.units.find((unit) => unit.unitId === rule.matchUnitId);
@@ -609,6 +609,39 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     });
     const reviewer = await actor('contained-route-scope-officer');
     const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.branch.unitId);
+    const before = await scopeCounts(input.membershipId);
+
+    await expect(
+      provisionSyntheticHotelReviewScope(client, input, reviewScopeEnvironment),
+    ).rejects.toThrow(
+      'The review scope must fit configured Bureau coverage and authorize a routed case.',
+    );
+    expect(await scopeCounts(input.membershipId)).toEqual(before);
+  });
+
+  it('provisions a contained scope that authorizes a case on a matching narrower route', async () => {
+    const f = await fixture((pair) => {
+      const broadRule = pair.routing.rules[0]!;
+      const matched = pair.geography.units.find((unit) => unit.unitId === broadRule.matchUnitId);
+      let routeScope = matched;
+      while (routeScope?.parentUnitId) {
+        routeScope = pair.geography.units.find((unit) => unit.unitId === routeScope!.parentUnitId);
+      }
+      if (!routeScope || !matched?.parentUnitId)
+        throw new Error('Synthetic route hierarchy fixture is incomplete.');
+      broadRule.scopeUnitId = routeScope.unitId;
+      pair.routing.rules.push({
+        id: randomUUID(),
+        matchUnitId: matched.parentUnitId,
+        matchMode: 'exact',
+        organizationId: broadRule.organizationId,
+        scopeUnitId: matched.parentUnitId,
+        enabled: true,
+      });
+    });
+    const submitted = await submit(f, f.branch);
+    const reviewer = await actor('matching-narrow-route-officer');
+    const input = await scopeInput(reviewer, f.officeA, f.pair.geography.id, f.branch.unitId);
     const provisioned = await provisionSyntheticHotelReviewScope(
       client,
       input,
@@ -616,15 +649,8 @@ suite('release-aware hotel location directory PostgreSQL integration', () => {
     );
 
     expect(provisioned.created).toBe(true);
-    const [scope] = await client.unsafe(
-      `SELECT hotel_geography_release_id, hotel_geography_unit_id, include_descendants
-       FROM grant_scopes WHERE id = $1`,
-      [provisioned.scopeId],
-    );
-    expect(scope).toEqual({
-      hotel_geography_release_id: f.pair.geography.id,
-      hotel_geography_unit_id: f.branch.unitId,
-      include_descendants: true,
+    expect(await f.service.getBureauCase(reviewer, await caseId(submitted.id))).toMatchObject({
+      assignment: { organizationId: f.officeA, scopeUnitId: f.branch.unitId },
     });
   });
 

@@ -165,7 +165,8 @@ export async function provisionSyntheticHotelReviewScope(
         'An active synthetic Bureau identity/membership binding is required.',
       );
     const [scopeUnit] = await transaction.unsafe<{ unit_id: string }[]>(
-      `WITH RECURSIVE requested_scope_ancestors (id, unit_id, parent_revision_id) AS (
+      `WITH RECURSIVE
+       requested_scope_ancestors (id, unit_id, parent_revision_id) AS (
          SELECT revision.id, revision.unit_id, revision.parent_revision_id
          FROM hotel_geography_unit_revisions revision
          WHERE revision.geography_release_id = $1 AND revision.unit_id = $2
@@ -174,27 +175,48 @@ export async function provisionSyntheticHotelReviewScope(
          FROM hotel_geography_unit_revisions parent
          JOIN requested_scope_ancestors child ON child.parent_revision_id = parent.id
          WHERE parent.geography_release_id = $1
+       ), eligible_routes (id, scope_unit_id) AS (
+         SELECT rule.id, rule.scope_unit_id
+         FROM hotel_routing_releases routing
+         JOIN hotel_routing_rules rule ON rule.routing_release_id = routing.id
+           AND rule.geography_release_id = routing.geography_release_id
+         WHERE routing.geography_release_id = $1 AND routing.synthetic = true
+           AND routing.activated_at IS NOT NULL AND rule.enabled = true
+           AND rule.bureau_organization_id = $3
+       ), routed_scope_ancestors (route_id, id, unit_id, parent_revision_id) AS (
+         SELECT route.id, revision.id, revision.unit_id, revision.parent_revision_id
+         FROM eligible_routes route
+         JOIN hotel_geography_unit_revisions revision
+           ON revision.geography_release_id = $1 AND revision.unit_id = route.scope_unit_id
+         UNION
+         SELECT child.route_id, parent.id, parent.unit_id, parent.parent_revision_id
+         FROM hotel_geography_unit_revisions parent
+         JOIN routed_scope_ancestors child ON child.parent_revision_id = parent.id
+         WHERE parent.geography_release_id = $1
        )
        SELECT revision.unit_id FROM hotel_geography_unit_revisions revision
        JOIN hotel_geography_releases geography ON geography.id = revision.geography_release_id
        WHERE geography.id = $1 AND revision.unit_id = $2 AND geography.synthetic = true
          AND geography.validation_status = 'valid' AND geography.activated_at IS NOT NULL
          AND EXISTS (
-           SELECT 1 FROM hotel_routing_releases routing
-           JOIN hotel_routing_rules rule ON rule.routing_release_id = routing.id
-             AND rule.geography_release_id = routing.geography_release_id
-           WHERE routing.geography_release_id = geography.id AND routing.synthetic = true
-             AND routing.activated_at IS NOT NULL AND rule.enabled = true
-             AND rule.bureau_organization_id = $3
-             AND rule.scope_unit_id IN (
-               SELECT ancestor.unit_id FROM requested_scope_ancestors ancestor
-             )
+           SELECT 1 FROM eligible_routes route
+           WHERE route.scope_unit_id IN (
+             SELECT ancestor.unit_id FROM requested_scope_ancestors ancestor
+           )
+         )
+         AND EXISTS (
+           SELECT 1 FROM eligible_routes route
+           WHERE route.scope_unit_id = $2
+             OR ($4::boolean AND EXISTS (
+               SELECT 1 FROM routed_scope_ancestors ancestor
+               WHERE ancestor.route_id = route.id AND ancestor.unit_id = $2
+             ))
          )`,
-      [input.geographyReleaseId, input.scopeUnitId, input.organizationId],
+      [input.geographyReleaseId, input.scopeUnitId, input.organizationId, input.includeDescendants],
     );
     if (!scopeUnit)
       throw new HotelReviewScopeProvisioningError(
-        'The synthetic release, configured Bureau or review scope is unavailable.',
+        'The review scope must fit configured Bureau coverage and authorize a routed case.',
       );
     type Grant = {
       id: string;
