@@ -26,7 +26,7 @@
   `apps/backend/api/src/hotels/hotel-onboarding.dto.ts` and
   `packages/backend-domain/src/hotels/hotel-onboarding-service.ts`.
 
-## Checks on the integrated tree
+## Checks on the integrated tree at `89732fe` (historical)
 
 - `pnpm test`: **247 passed, 0 failed, 77 skipped**. The skipped cases are the
   opt-in PostgreSQL suites (60 location-directory, 16 hotel-onboarding, and 1
@@ -44,6 +44,32 @@
   Browser acceptance remains pending. Contributor PostgreSQL results are
   separate evidence and are not counted as tests executed on this integrated
   tree.
+
+## Latest Local Checkpoint: `f64e5ab`
+
+The integration branch was fast-forwarded from `89732fea5c5cfb7372d8a828bd8d6795d175f68c`
+to its direct child `f64e5ab5a21c8017df208e5b432fa1e685bbd7fe`. This checkpoint
+changes the PostgreSQL mixed-grant test fixture only; it keeps the production
+provisioning and authorization rules unchanged.
+
+- `pnpm --filter @ethio-tour/db build`: passed before the PostgreSQL run, avoiding
+  stale ignored `packages/db/dist` output.
+- `pnpm test:hotel:migration`: **18 passed, 0 failed, 0 skipped**. The guarded
+  `pnpm db:migrate:hotel-test` migration step completed successfully.
+- The guarded `hotel-postgis` integration command and
+  `node scripts/assert-hotel-tests-executed.cjs <report>`: **81 passed, 0 failed,
+  0 skipped**. Suite breakdown: hotel onboarding 16/16, hotel location directory
+  64/64, and directory upgrade 1/1. The JSON report remains outside the
+  repository at
+  `C:\Users\Ermias\AppData\Local\Temp\hotel-fixture-fix-9b75e8df5e2e.json`.
+- Focused service-free tests, typecheck, lint, formatting, build, and
+  `git diff --check` for the fixture fix passed.
+- The full root `pnpm test` and browser acceptance were **not rerun** at
+  `f64e5ab`. The historical 247/77 root-test result above is not evidence for
+  this checkpoint. Real-auth browser acceptance remains pending.
+- The PostgreSQL run used only newly created, task-owned disposable PostGIS
+  storage on loopback port `64862`; that task-owned container was removed after
+  verification. No existing stack or database was used or changed.
 
 ## Review handoff
 
