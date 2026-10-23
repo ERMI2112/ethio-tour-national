@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { HotelApplicationResponse } from '../../../lib/hotel-pilot-ui-state';
 import { HotelPilotSessionProvider } from '../../../lib/hotel-pilot-session';
 import AdmittedHotelWorkspacePage from './page';
@@ -85,6 +85,16 @@ function createAdmittedApp(
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('AdmittedHotelWorkspacePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,7 +115,7 @@ describe('AdmittedHotelWorkspacePage', () => {
     await screen.findByRole('article', { name: 'Admitted hotel workspace' });
 
     expect(screen.getByText('Abyssinia Grand Hotel')).toBeDefined();
-    expect(screen.getByText('Current application version 3')).toBeDefined();
+    expect(screen.getByText('Submitted application version 3')).toBeDefined();
     expect(
       screen.getByText(/Admission recorded for submitted version:/).parentElement?.textContent,
     ).toContain('2');
@@ -137,12 +147,12 @@ describe('AdmittedHotelWorkspacePage', () => {
     );
 
     await screen.findByRole('article', { name: 'Admitted hotel workspace' });
-    expect(screen.getByText('Current application version 3')).toBeDefined();
+    expect(screen.getByText('Submitted application version 3')).toBeDefined();
 
     const refreshButton = screen.getByRole('button', { name: 'Refresh workspace' });
     fireEvent.click(refreshButton);
 
-    await screen.findByText('Current application version 4');
+    await screen.findByText('Submitted application version 4');
     expect(mockApi.getAdmittedHotelWorkspace).toHaveBeenCalledTimes(2);
   });
 
@@ -167,5 +177,112 @@ describe('AdmittedHotelWorkspacePage', () => {
 
     await screen.findByText(/Access denied/);
     expect(screen.queryByRole('article', { name: 'Admitted hotel workspace' })).toBeNull();
+  });
+
+  it('hides the previous identity workspace immediately and ignores its pending refresh', async () => {
+    const oldIdentityRefresh = deferred<HotelApplicationResponse>();
+    const newIdentityLoad = deferred<HotelApplicationResponse>();
+    const oldIdentityApp = createAdmittedApp('app-identity', 'Identity A Private Hotel');
+    let oldIdentityCalls = 0;
+    mockApi.getAdmittedHotelWorkspace.mockImplementation(
+      (applicationId: string, { accessToken }: { accessToken: string }) => {
+        if (accessToken === 'token-a') {
+          oldIdentityCalls++;
+          return oldIdentityCalls === 1
+            ? Promise.resolve(oldIdentityApp)
+            : oldIdentityRefresh.promise;
+        }
+        return newIdentityLoad.promise;
+      },
+    );
+    const params = Promise.resolve({ id: 'app-identity' });
+    const { rerender } = render(
+      <HotelPilotSessionProvider accessToken="token-a">
+        <AdmittedHotelWorkspacePage params={params} />
+      </HotelPilotSessionProvider>,
+    );
+
+    await screen.findByText('Identity A Private Hotel');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh workspace' }));
+    await waitFor(() => expect(mockApi.getAdmittedHotelWorkspace).toHaveBeenCalledTimes(2));
+
+    rerender(
+      <HotelPilotSessionProvider accessToken="token-b">
+        <AdmittedHotelWorkspacePage params={params} />
+      </HotelPilotSessionProvider>,
+    );
+    expect(screen.queryByText('Identity A Private Hotel')).toBeNull();
+    await waitFor(() => expect(mockApi.getAdmittedHotelWorkspace).toHaveBeenCalledTimes(3));
+    expect(screen.queryByText('Identity A Private Hotel')).toBeNull();
+
+    const { ApiClientError } = await import('@ethio-tour/api-client');
+    await act(async () =>
+      newIdentityLoad.reject(new ApiClientError('Forbidden', 403, 'forbidden')),
+    );
+    await screen.findByText(/Access denied/);
+    await act(async () => oldIdentityRefresh.resolve(oldIdentityApp));
+
+    expect(screen.queryByRole('article', { name: 'Admitted hotel workspace' })).toBeNull();
+    expect(screen.queryByText('Identity A Private Hotel')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('Access denied');
+  });
+
+  it('does not render an old application response after the route ID changes', async () => {
+    const oldRouteResponse = deferred<HotelApplicationResponse>();
+    const oldApp = createAdmittedApp('app-old-route', 'Old Route Private Hotel');
+    const newApp = createAdmittedApp('app-new-route', 'New Route Private Hotel');
+    mockApi.getAdmittedHotelWorkspace
+      .mockImplementationOnce(() => oldRouteResponse.promise)
+      .mockResolvedValueOnce(newApp);
+
+    const { rerender } = render(
+      <HotelPilotSessionProvider accessToken="same-token">
+        <AdmittedHotelWorkspacePage params={Promise.resolve({ id: 'app-old-route' })} />
+      </HotelPilotSessionProvider>,
+    );
+    await waitFor(() => expect(mockApi.getAdmittedHotelWorkspace).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <HotelPilotSessionProvider accessToken="same-token">
+        <AdmittedHotelWorkspacePage params={Promise.resolve({ id: 'app-new-route' })} />
+      </HotelPilotSessionProvider>,
+    );
+    await screen.findByText('New Route Private Hotel');
+    await act(async () => oldRouteResponse.resolve(oldApp));
+
+    expect(screen.queryByText('Old Route Private Hotel')).toBeNull();
+    expect(screen.getByText('New Route Private Hotel')).toBeDefined();
+    expect(mockApi.getAdmittedHotelWorkspace).toHaveBeenNthCalledWith(1, 'app-old-route', {
+      accessToken: 'same-token',
+    });
+    expect(mockApi.getAdmittedHotelWorkspace).toHaveBeenNthCalledWith(2, 'app-new-route', {
+      accessToken: 'same-token',
+    });
+  });
+
+  it('labels a draft separately from the already-admitted submitted version', async () => {
+    const draft = createAdmittedApp('app-draft', 'Current private draft hotel');
+    draft.status = 'draft';
+    draft.currentVersion = 3;
+    draft.currentVersionId = 'submitted-version-3';
+    draft.admittedVersion = 2;
+    mockApi.getAdmittedHotelWorkspace.mockResolvedValueOnce(draft);
+
+    render(
+      <HotelPilotSessionProvider accessToken="test-token">
+        <AdmittedHotelWorkspacePage params={Promise.resolve({ id: 'app-draft' })} />
+      </HotelPilotSessionProvider>,
+    );
+
+    await screen.findByText('Draft for next Bureau review · previous submitted version 3');
+    expect(screen.getByText('Current private draft hotel')).toBeDefined();
+    expect(
+      screen.getByText(
+        'This is private draft content, not a submitted or approved version. Workspace access remains from admitted version 2.',
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByText(/Admission recorded for submitted version:/).parentElement?.textContent,
+    ).toContain('2');
   });
 });

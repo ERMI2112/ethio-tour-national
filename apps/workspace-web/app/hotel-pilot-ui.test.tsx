@@ -562,12 +562,27 @@ describe('hotel location selection, snapshots, and error retention', () => {
     fireEvent.change(card.getByLabelText('Application notes'), {
       target: { value: 'Unsaved correction' },
     });
+    const submitButton = card.getByRole('button', { name: 'Submit this version for review' });
+    expect((submitButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(card.getByRole('button', { name: 'Submit this version for review' }));
+    expect(mockApiClient.submitHotelApplication).not.toHaveBeenCalled();
+    fireEvent.change(card.getByLabelText('Application notes'), {
+      target: { value: 'Saved notes' },
+    });
     fireEvent.click(card.getByRole('button', { name: 'Submit this version for review' }));
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toBe(
         'Review routing is unavailable for this location. Your draft is saved; submission has not occurred.',
       ),
     );
+    expect(mockApiClient.submitHotelApplication).toHaveBeenCalledWith(
+      draft.id,
+      { expectedVersion: draft.version },
+      { accessToken: 'test-session' },
+    );
+    fireEvent.change(card.getByLabelText('Application notes'), {
+      target: { value: 'Unsaved correction' },
+    });
     expect((card.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe(
       'Unsaved correction',
     );

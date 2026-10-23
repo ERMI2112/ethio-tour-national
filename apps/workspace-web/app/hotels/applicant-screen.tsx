@@ -39,6 +39,7 @@ export function HotelApplicantScreen() {
   const [newLocationSelection, setNewLocationSelection] = useState<HotelLocationSelection | null>(
     null,
   );
+  const [newLocationSelectionToken, setNewLocationSelectionToken] = useState(accessToken);
   const [newLocationSelectionValid, setNewLocationSelectionValid] = useState(false);
   const [applicationsToken, setApplicationsToken] = useState<string | null>(null);
   const [loadingToken, setLoadingToken] = useState<string | null>(null);
@@ -50,6 +51,11 @@ export function HotelApplicantScreen() {
   const requestSequence = useRef(0);
   const currentToken = useRef(accessToken);
   const creationInFlight = useRef(false);
+
+  const currentNewLocationSelection =
+    newLocationSelectionToken === accessToken ? newLocationSelection : null;
+  const currentNewLocationSelectionValid =
+    newLocationSelectionToken === accessToken && newLocationSelectionValid;
 
   const reload = useCallback(async () => {
     const requestToken = accessToken;
@@ -96,6 +102,7 @@ export function HotelApplicantScreen() {
     setErrorToken(null);
     setNotice(null);
     setNoticeToken(null);
+    setNewLocationSelectionToken(accessToken);
     setFilters({ token: accessToken, query: '' });
     if (!accessToken) {
       return;
@@ -110,6 +117,7 @@ export function HotelApplicantScreen() {
       setApplications([]);
       setApplicationsToken(null);
       setFilters({ token: currentToken.current, query: '' });
+      setLoading(false);
       setError('Your authenticated session is missing or has expired.');
       setErrorToken(currentToken.current);
     };
@@ -128,14 +136,14 @@ export function HotelApplicantScreen() {
     const content = {
       claimedHotelName: String(form.get('claimedHotelName') ?? '').trim(),
       applicantNotes: String(form.get('applicantNotes') ?? '').trim(),
-      ...(newLocationSelection ? { locationSelection: newLocationSelection } : {}),
+      ...(currentNewLocationSelection ? { locationSelection: currentNewLocationSelection } : {}),
     };
     if (!content.claimedHotelName) {
       setError('Enter the hotel name you are applying about.');
       setErrorToken(requestToken);
       return;
     }
-    if (!newLocationSelection || !newLocationSelectionValid) {
+    if (!currentNewLocationSelection || !currentNewLocationSelectionValid) {
       setError('Search and choose a location in the active directory before creating the draft.');
       setErrorToken(requestToken);
       return;
@@ -150,10 +158,15 @@ export function HotelApplicantScreen() {
     try {
       const created = await createHotelApplication({ content }, { accessToken: requestToken });
       if (currentToken.current !== requestToken) return;
-      setApplications((current) => [created, ...current]);
+      requestSequence.current++;
+      setLoading(false);
+      setLoadingToken(requestToken);
+      setApplicationsToken(requestToken);
+      setApplications((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       setNotice('The private draft was returned by the API. Review it below before submitting.');
       setNoticeToken(requestToken);
       formElement.reset();
+      setNewLocationSelectionToken(requestToken);
       setNewLocationSelection(null);
       setNewLocationSelectionValid(false);
     } catch (requestError) {
@@ -162,9 +175,11 @@ export function HotelApplicantScreen() {
           requestError instanceof ApiClientError &&
           (requestError.status === 401 || requestError.status === 403)
         ) {
+          requestSequence.current++;
           setApplications([]);
           setApplicationsToken(requestToken);
           setFilters({ token: requestToken, query: '' });
+          setLoading(false);
         }
         setError(describeApiFailure(requestError, 'creating the private application'));
         setErrorToken(requestToken);
@@ -189,6 +204,10 @@ export function HotelApplicantScreen() {
         { accessToken: requestToken },
       );
       if (currentToken.current !== requestToken) return;
+      requestSequence.current++;
+      setLoading(false);
+      setLoadingToken(requestToken);
+      setApplicationsToken(requestToken);
       setApplications((current) => replaceApplication(current, updated));
       setNotice('The API accepted the submission. Its status below reflects the API response.');
       setNoticeToken(requestToken);
@@ -198,9 +217,11 @@ export function HotelApplicantScreen() {
           requestError instanceof ApiClientError &&
           (requestError.status === 401 || requestError.status === 403)
         ) {
+          requestSequence.current++;
           setApplications([]);
           setApplicationsToken(requestToken);
           setFilters({ token: requestToken, query: '' });
+          setLoading(false);
         }
         setError(
           requestError instanceof ApiClientError &&
@@ -217,9 +238,9 @@ export function HotelApplicantScreen() {
   async function createCorrection(
     application: HotelApplicationResponse,
     content: HotelApplicationContent,
-  ) {
+  ): Promise<boolean> {
     const requestToken = accessToken;
-    if (!requestToken) return;
+    if (!requestToken) return false;
     setError(null);
     setErrorToken(null);
     setNotice(null);
@@ -230,23 +251,31 @@ export function HotelApplicantScreen() {
         { expectedVersion: application.version, content },
         { accessToken: requestToken },
       );
-      if (currentToken.current !== requestToken) return;
+      if (currentToken.current !== requestToken) return false;
+      requestSequence.current++;
+      setLoading(false);
+      setLoadingToken(requestToken);
+      setApplicationsToken(requestToken);
       setApplications((current) => replaceApplication(current, updated));
       setNotice('The API returned a new private version. Submit it for Bureau review when ready.');
       setNoticeToken(requestToken);
+      return true;
     } catch (requestError) {
       if (currentToken.current === requestToken) {
         if (
           requestError instanceof ApiClientError &&
           (requestError.status === 401 || requestError.status === 403)
         ) {
+          requestSequence.current++;
           setApplications([]);
           setApplicationsToken(requestToken);
           setFilters({ token: requestToken, query: '' });
+          setLoading(false);
         }
         setError(describeApiFailure(requestError, 'creating the corrected version'));
         setErrorToken(requestToken);
       }
+      return false;
     }
   }
 
@@ -286,7 +315,7 @@ export function HotelApplicantScreen() {
                 <h2 id="create-hotel-application-title">Start an application</h2>
               </div>
             </div>
-            <form className="form-stack" onSubmit={createApplication}>
+            <form key={accessToken} className="form-stack" onSubmit={createApplication}>
               <div className="form-field">
                 <label htmlFor="claimed-hotel-name">Hotel name stated in this application</label>
                 <input id="claimed-hotel-name" name="claimedHotelName" required />
@@ -298,12 +327,18 @@ export function HotelApplicantScreen() {
               <HotelLocationSelector
                 id="new-hotel-location"
                 accessToken={accessToken}
-                value={newLocationSelection}
+                value={currentNewLocationSelection}
                 locationSnapshot={null}
-                onChange={setNewLocationSelection}
-                onSelectionValidityChange={setNewLocationSelectionValid}
+                onChange={(selection) => {
+                  setNewLocationSelectionToken(accessToken);
+                  setNewLocationSelection(selection);
+                }}
+                onSelectionValidityChange={(valid) => {
+                  setNewLocationSelectionToken(accessToken);
+                  setNewLocationSelectionValid(valid);
+                }}
               />
-              <button type="submit" disabled={creating || !newLocationSelectionValid}>
+              <button type="submit" disabled={creating || !currentNewLocationSelectionValid}>
                 {creating ? 'Creating draft…' : 'Create private draft'}
               </button>
             </form>
@@ -441,7 +476,7 @@ function ApplicantApplicationCard({
   accessToken: string;
   hidden: boolean;
   onSubmit: () => Promise<void>;
-  onCreateCorrection: (content: HotelApplicationContent) => Promise<void>;
+  onCreateCorrection: (content: HotelApplicationContent) => Promise<boolean>;
 }>) {
   const [claimedHotelName, setClaimedHotelName] = useState(application.content.claimedHotelName);
   const [applicantNotes, setApplicantNotes] = useState(application.content.applicantNotes);
@@ -488,12 +523,12 @@ function ApplicantApplicationCard({
       const notes = String(form.get('applicantNotes') ?? '').trim();
       if (!name) return;
       if (!locationSelection || !locationSelectionValid) return;
-      await onCreateCorrection({
+      const saved = await onCreateCorrection({
         claimedHotelName: name,
         applicantNotes: notes,
         locationSelection,
       });
-      setSaveFeedback('Private draft saved on the server.');
+      if (saved) setSaveFeedback('Private draft saved on the server.');
     } finally {
       submissionInFlight.current = false;
       setBusy(false);
@@ -623,11 +658,24 @@ function ApplicantApplicationCard({
                 </p>
               )}
               <p>
-                <strong>Claimed hotel:</strong> {admittedWorkspace.content.claimedHotelName}
+                <strong>
+                  {admittedWorkspace.status === 'draft'
+                    ? 'Current private draft hotel name:'
+                    : 'Current submitted hotel name:'}
+                </strong>{' '}
+                {admittedWorkspace.content.claimedHotelName}
               </p>
               <p>
-                <strong>Admitted version:</strong> {admittedWorkspace.currentVersion}
+                <strong>Admitted version:</strong>{' '}
+                {admittedWorkspace.admittedVersion ?? 'not recorded'}
               </p>
+              <p className="muted">{applicationVersionLabel(admittedWorkspace)}</p>
+              {admittedWorkspace.status === 'draft' && (
+                <p className="notice" role="note">
+                  This is private draft content, not a submitted or approved version. Earlier
+                  decisions do not approve this draft.
+                </p>
+              )}
               <p className="muted">
                 <strong>Workspace tier:</strong>{' '}
                 {admittedWorkspace.workspaceAccess.replaceAll('_', ' ')} ·{' '}
@@ -681,8 +729,10 @@ function ApplicantApplicationCard({
           </strong>
           <p>{application.bureauDecision.reason}</p>
           <p className="muted">
-            Applies only to submitted version {application.bureauDecision.applicationVersion}; a new
-            draft has not been reviewed.
+            Applies only to submitted version {application.bureauDecision.applicationVersion} and
+            its submitted location.
+            {application.status === 'draft' &&
+              ' The current private draft and its declared location have not been reviewed.'}
           </p>
         </div>
       )}
@@ -754,15 +804,22 @@ function ApplicantApplicationCard({
       {canSubmitHotelApplication(application) && (
         <div className={`action-row decision-details ${styles.submissionGuidance}`}>
           <p>
-            <strong>Submitting for review:</strong> Submitting creates an immutable snapshot of this
-            version and routes your property location to the competent Bureau office. Once
-            submitted, changes cannot be made until review is completed.
+            <strong>Submitting for review:</strong> The API submits the saved draft and creates an
+            immutable version snapshot. Save any edits before submitting. The location is routed
+            using the configured synthetic pilot mapping; this does not establish an official office
+            jurisdiction. While a version is in review it cannot be edited. A requested correction
+            or later change to an approved application can be saved as a new private draft; rejected
+            or declined applications are terminal in this pilot.
           </p>
           {!sameLocationSelection(locationSelection, application.content.locationSelection) && (
             <p className="field-hint">
               Save your chosen location before submitting this version for review.
             </p>
           )}
+          {isDirty &&
+            sameLocationSelection(locationSelection, application.content.locationSelection) && (
+              <p className="field-hint">Save your unsaved name or notes before submitting.</p>
+            )}
           {application.locationState === 'stale' && (
             <p className="field-hint">
               The saved location is stale. Search the directory and select a current location before
@@ -775,6 +832,7 @@ function ApplicantApplicationCard({
               busy ||
               !application.content.locationSelection ||
               !locationSelectionValid ||
+              isDirty ||
               !sameLocationSelection(locationSelection, application.content.locationSelection)
             }
             onClick={async () => {

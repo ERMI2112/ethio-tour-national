@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { HotelApplicationResponse } from '../lib/hotel-pilot-ui-state';
 import { HotelPilotSessionProvider } from '../lib/hotel-pilot-session';
 import { HotelApplicantScreen } from './applicant-screen';
@@ -119,6 +119,14 @@ function createMockApp(
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe('HotelApplicantScreen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -219,8 +227,7 @@ describe('HotelApplicantScreen', () => {
     const notesField = within(baharCard).getByLabelText('Application notes');
     fireEvent.change(notesField, { target: { value: 'Lakefront private suite' } });
 
-    // Expect unsaved badge to appear
-    expect(within(baharCard).getByText('Unsaved draft changes')).toBeDefined();
+    await waitFor(() => expect(within(baharCard).getByText('Unsaved draft changes')).toBeDefined());
 
     // Search for the other hotel (hiding Bahar Dar)
     const searchInput = screen.getByRole('searchbox', { name: 'Search your applications' });
@@ -233,7 +240,207 @@ describe('HotelApplicantScreen', () => {
     expect(
       (within(restoredCard).getByLabelText('Application notes') as HTMLTextAreaElement).value,
     ).toBe('Lakefront private suite');
-    expect(within(restoredCard).getByText('Unsaved draft changes')).toBeDefined();
+    await waitFor(() =>
+      expect(within(restoredCard).getByText('Unsaved draft changes')).toBeDefined(),
+    );
+  });
+
+  it('submits only a successfully saved draft version and keeps the target through filtering', async () => {
+    const target = createMockApp('app-target', 'Target Lodge', {
+      status: 'draft',
+      version: 8,
+    });
+    const other = createMockApp('app-other', 'Other Lodge', { status: 'draft' });
+    mockApi.getMyHotelApplications.mockResolvedValueOnce({ items: [target, other] });
+
+    render(
+      <HotelPilotSessionProvider accessToken="test-applicant-token">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    let targetCard = await screen.findByRole('article', { name: 'Target Lodge' });
+    const submit = within(targetCard).getByRole('button', {
+      name: 'Submit this version for review',
+    });
+    await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
+
+    const notes = within(targetCard).getByLabelText('Application notes') as HTMLTextAreaElement;
+    fireEvent.change(notes, { target: { value: 'Unsaved notes must not be submitted.' } });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(submit);
+    expect(mockApi.submitHotelApplication).not.toHaveBeenCalled();
+
+    const search = screen.getByRole('searchbox', { name: 'Search your applications' });
+    fireEvent.change(search, { target: { value: 'Other Lodge' } });
+    expect(screen.queryByRole('article', { name: 'Target Lodge' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    targetCard = await screen.findByRole('article', { name: 'Target Lodge' });
+    expect(
+      (within(targetCard).getByLabelText('Application notes') as HTMLTextAreaElement).value,
+    ).toBe('Unsaved notes must not be submitted.');
+
+    const saved = {
+      ...target,
+      version: 9,
+      content: { ...target.content, applicantNotes: 'Unsaved notes must not be submitted.' },
+    };
+    mockApi.createHotelApplicationRevision.mockResolvedValueOnce(saved);
+    fireEvent.click(within(targetCard).getByRole('button', { name: 'Save private draft' }));
+    await screen.findByText('Private draft saved on the server.');
+    await waitFor(() =>
+      expect(
+        (within(targetCard).getByLabelText('Application notes') as HTMLTextAreaElement).value,
+      ).toBe(saved.content.applicantNotes),
+    );
+    await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
+
+    const submitted = {
+      ...saved,
+      status: 'submitted' as const,
+      currentVersion: 1,
+      currentVersionId: 'submitted-version-1',
+      version: 10,
+      locationState: 'submitted_snapshot' as const,
+    };
+    mockApi.submitHotelApplication.mockResolvedValueOnce(submitted);
+    fireEvent.click(
+      within(targetCard).getByRole('button', { name: 'Submit this version for review' }),
+    );
+    await waitFor(() =>
+      expect(mockApi.submitHotelApplication).toHaveBeenCalledWith(
+        'app-target',
+        { expectedVersion: saved.version },
+        { accessToken: 'test-applicant-token' },
+      ),
+    );
+    expect(mockApi.createHotelApplicationRevision).toHaveBeenCalledWith(
+      'app-target',
+      {
+        expectedVersion: target.version,
+        content: {
+          ...target.content,
+          applicantNotes: 'Unsaved notes must not be submitted.',
+        },
+      },
+      { accessToken: 'test-applicant-token' },
+    );
+  });
+
+  it('preserves unsaved inputs and never reports a failed save as successful', async () => {
+    const draft = createMockApp('app-save-failure', 'Save Failure Lodge', {
+      status: 'draft',
+      version: 4,
+    });
+    mockApi.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
+    mockApi.createHotelApplicationRevision.mockRejectedValueOnce(new Error('offline'));
+
+    render(
+      <HotelPilotSessionProvider accessToken="test-applicant-token">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    const card = await screen.findByRole('article', { name: 'Save Failure Lodge' });
+    const notes = within(card).getByLabelText('Application notes') as HTMLTextAreaElement;
+    fireEvent.change(notes, { target: { value: 'Keep this input after a failed save.' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save private draft' }));
+
+    expect(await screen.findByRole('alert')).toBeDefined();
+    expect(screen.queryByText('Private draft saved on the server.')).toBeNull();
+    expect(notes.value).toBe('Keep this input after a failed save.');
+    expect(within(card).getByText('Unsaved draft changes')).toBeDefined();
+    expect(
+      (
+        within(card).getByRole('button', {
+          name: 'Submit this version for review',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it('preserves the saved draft inputs and state when submission fails', async () => {
+    const draft = createMockApp('app-submit-failure', 'Submit Failure Lodge', {
+      status: 'draft',
+      version: 11,
+    });
+    mockApi.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
+    mockApi.submitHotelApplication.mockRejectedValueOnce(new Error('offline'));
+
+    render(
+      <HotelPilotSessionProvider accessToken="test-applicant-token">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    const card = await screen.findByRole('article', { name: 'Submit Failure Lodge' });
+    const notes = within(card).getByLabelText('Application notes') as HTMLTextAreaElement;
+    const submit = within(card).getByRole('button', { name: 'Submit this version for review' });
+    await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(submit);
+
+    expect(await screen.findByRole('alert')).toBeDefined();
+    expect(notes.value).toBe(draft.content.applicantNotes);
+    expect(within(card).getByText('Saved on server')).toBeDefined();
+    expect(within(card).getByText('draft')).toBeDefined();
+    expect(mockApi.submitHotelApplication).toHaveBeenCalledWith(
+      draft.id,
+      { expectedVersion: draft.version },
+      { accessToken: 'test-applicant-token' },
+    );
+  });
+
+  it('keeps the stale location until the applicant selects and saves an active-release location', async () => {
+    const stale = createMockApp('app-stale-location', 'Stale Location Lodge', {
+      status: 'draft',
+      version: 6,
+      locationState: 'stale',
+      content: {
+        claimedHotelName: 'Stale Location Lodge',
+        applicantNotes: 'Keep this draft note.',
+        locationSelection: {
+          geographyReleaseId: 'old-release',
+          unitId: 'old-unit',
+          unitRevisionId: 'old-unit-revision',
+        },
+      },
+    });
+    mockApi.getMyHotelApplications.mockResolvedValueOnce({ items: [stale] });
+
+    render(
+      <HotelPilotSessionProvider accessToken="test-applicant-token">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    const card = await screen.findByRole('article', { name: 'Stale Location Lodge' });
+    const locationSelect = within(card).getByLabelText('Choose a location') as HTMLSelectElement;
+    await waitFor(() => expect(locationSelect.disabled).toBe(false));
+    expect(locationSelect.value).toBe('');
+    fireEvent.change(locationSelect, { target: { value: 'unit-gondar' } });
+
+    const submit = within(card).getByRole('button', { name: 'Submit this version for review' });
+    await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(true));
+    const activeSelection = {
+      geographyReleaseId: mockDirectoryRelease.id,
+      unitId: 'unit-gondar',
+      unitRevisionId: 'rev-gondar-1',
+    };
+    const saved = {
+      ...stale,
+      version: 7,
+      locationState: 'current' as const,
+      content: { ...stale.content, locationSelection: activeSelection },
+    };
+    mockApi.createHotelApplicationRevision.mockResolvedValueOnce(saved);
+    fireEvent.click(within(card).getByRole('button', { name: 'Save private draft' }));
+    await screen.findByText('Private draft saved on the server.');
+    expect(mockApi.createHotelApplicationRevision).toHaveBeenCalledWith(
+      stale.id,
+      { expectedVersion: stale.version, content: saved.content },
+      { accessToken: 'test-applicant-token' },
+    );
+    expect(mockApi.submitHotelApplication).not.toHaveBeenCalled();
   });
 
   it('displays explicit guidance and disables submission when location selection is stale', async () => {
@@ -297,6 +504,162 @@ describe('HotelApplicantScreen', () => {
     expect(screen.getByText('Authenticated workspace session unavailable')).toBeDefined();
   });
 
+  it('does not restore an earlier identity list when its request resolves after an identity change', async () => {
+    const firstIdentity = deferred<{ items: HotelApplicationResponse[] }>();
+    const secondIdentity = deferred<{ items: HotelApplicationResponse[] }>();
+    const firstApp = createMockApp('private-a', 'Identity A Private Hotel');
+    const secondApp = createMockApp('private-b', 'Identity B Private Hotel');
+    mockApi.getMyHotelApplications.mockImplementation(({ accessToken }: { accessToken: string }) =>
+      accessToken === 'token-a' ? firstIdentity.promise : secondIdentity.promise,
+    );
+
+    const { rerender } = render(
+      <HotelPilotSessionProvider accessToken="token-a">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+    await waitFor(() => expect(mockApi.getMyHotelApplications).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <HotelPilotSessionProvider accessToken="token-b">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+    await waitFor(() => expect(mockApi.getMyHotelApplications).toHaveBeenCalledTimes(2));
+    await act(async () => secondIdentity.resolve({ items: [secondApp] }));
+    await screen.findByRole('article', { name: 'Identity B Private Hotel' });
+
+    await act(async () => firstIdentity.resolve({ items: [firstApp] }));
+    expect(screen.queryByRole('article', { name: 'Identity A Private Hotel' })).toBeNull();
+    expect(screen.getByRole('article', { name: 'Identity B Private Hotel' })).toBeDefined();
+  });
+
+  it('does not add a created application after the creating identity changes', async () => {
+    const pendingCreate = deferred<HotelApplicationResponse>();
+    mockApi.createHotelApplication.mockReturnValueOnce(pendingCreate.promise);
+    const { rerender } = render(
+      <HotelPilotSessionProvider accessToken="token-a">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Hotel name stated in this application'), {
+      target: { value: 'Identity A new hotel' },
+    });
+    fireEvent.change(screen.getByLabelText('Application notes'), {
+      target: { value: 'Identity A private draft input' },
+    });
+    const locationSelect = screen.getByLabelText('Choose a location') as HTMLSelectElement;
+    await waitFor(() => expect(locationSelect.disabled).toBe(false));
+    fireEvent.change(locationSelect, { target: { value: 'unit-gondar' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create private draft' }));
+    await waitFor(() => expect(mockApi.createHotelApplication).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <HotelPilotSessionProvider accessToken="token-b">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+    await waitFor(() => expect(mockApi.getMyHotelApplications).toHaveBeenCalledTimes(2));
+    await act(async () =>
+      pendingCreate.resolve(createMockApp('created-a', 'Identity A new hotel')),
+    );
+
+    expect(screen.queryByText('Identity A new hotel')).toBeNull();
+    expect(screen.queryByText('Identity A private draft input')).toBeNull();
+    expect(
+      (screen.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
+    ).toBe('');
+  });
+
+  it.each(['save', 'submit'] as const)(
+    'does not restore a pending %s response after the applicant identity changes',
+    async (operation) => {
+      const pendingMutation = deferred<HotelApplicationResponse>();
+      const firstApp = createMockApp(`identity-a-${operation}`, 'Identity A Private Application', {
+        status: 'draft',
+        version: 5,
+      });
+      mockApi.getMyHotelApplications.mockResolvedValueOnce({ items: [firstApp] });
+      if (operation === 'save') {
+        mockApi.createHotelApplicationRevision.mockReturnValueOnce(pendingMutation.promise);
+      } else {
+        mockApi.submitHotelApplication.mockReturnValueOnce(pendingMutation.promise);
+      }
+
+      const { rerender } = render(
+        <HotelPilotSessionProvider accessToken="token-a">
+          <HotelApplicantScreen />
+        </HotelPilotSessionProvider>,
+      );
+      const card = await screen.findByRole('article', { name: 'Identity A Private Application' });
+      if (operation === 'save') {
+        fireEvent.change(within(card).getByLabelText('Application notes'), {
+          target: { value: 'Pending save from identity A' },
+        });
+        fireEvent.click(within(card).getByRole('button', { name: 'Save private draft' }));
+        await waitFor(() =>
+          expect(mockApi.createHotelApplicationRevision).toHaveBeenCalledTimes(1),
+        );
+      } else {
+        const submit = within(card).getByRole('button', { name: 'Submit this version for review' });
+        await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
+        fireEvent.click(submit);
+        await waitFor(() => expect(mockApi.submitHotelApplication).toHaveBeenCalledTimes(1));
+      }
+
+      rerender(
+        <HotelPilotSessionProvider accessToken="token-b">
+          <HotelApplicantScreen />
+        </HotelPilotSessionProvider>,
+      );
+      await waitFor(() => expect(mockApi.getMyHotelApplications).toHaveBeenCalledTimes(2));
+      await act(async () =>
+        pendingMutation.resolve({
+          ...firstApp,
+          content: { ...firstApp.content, applicantNotes: 'Late response for identity A' },
+        }),
+      );
+
+      expect(screen.queryByRole('article', { name: 'Identity A Private Application' })).toBeNull();
+      expect(screen.queryByText('Late response for identity A')).toBeNull();
+    },
+  );
+
+  it('clears unsaved new-application fields and location selection on direct identity change', async () => {
+    const { rerender } = render(
+      <HotelPilotSessionProvider accessToken="token-a">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Hotel name stated in this application'), {
+      target: { value: 'Identity A unsaved hotel' },
+    });
+    fireEvent.change(screen.getByLabelText('Application notes'), {
+      target: { value: 'Private notes from identity A' },
+    });
+    const locationSelect = screen.getByLabelText('Choose a location') as HTMLSelectElement;
+    await waitFor(() => expect(locationSelect.disabled).toBe(false));
+    fireEvent.change(locationSelect, { target: { value: 'unit-gondar' } });
+
+    rerender(
+      <HotelPilotSessionProvider accessToken="token-b">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    expect(
+      (screen.getByLabelText('Hotel name stated in this application') as HTMLInputElement).value,
+    ).toBe('');
+    expect((screen.getByLabelText('Application notes') as HTMLTextAreaElement).value).toBe('');
+    await waitFor(() =>
+      expect((screen.getByLabelText('Choose a location') as HTMLSelectElement).value).toBe(''),
+    );
+    expect(screen.queryByText('Identity A unsaved hotel')).toBeNull();
+    expect(screen.queryByText('Private notes from identity A')).toBeNull();
+  });
+
   it('explicitly labels newly selected draft locations as unreviewed after prior approval', async () => {
     const postApprovalDraft = createMockApp('app-approved', 'Axum Hotel', {
       status: 'draft',
@@ -333,8 +696,57 @@ describe('HotelApplicantScreen', () => {
     expect(within(card).getByText(/Previous submitted version 2 outcome approve/)).toBeDefined();
     expect(
       within(card).getByText(
-        /Applies only to submitted version 2; a new draft has not been reviewed./,
+        /Applies only to submitted version 2 and its submitted location. The current private draft and its declared location have not been reviewed./,
       ),
     ).toBeDefined();
+  });
+
+  it('keeps a current draft distinct from the version that granted private workspace access', async () => {
+    const draft = createMockApp('app-admitted-draft', 'New unsubmitted hotel name', {
+      status: 'draft',
+      admissionStatus: 'admitted',
+      workspaceAccess: 'private_only',
+      currentVersion: 3,
+      currentVersionId: 'submitted-version-3',
+      admittedVersion: 1,
+      bureauDecision: {
+        decision: 'approve',
+        applicationVersion: 3,
+        reason: 'Synthetic approval for version 3.',
+        decidedAt: '2026-10-20T10:00:00Z',
+      },
+      admissionDecision: {
+        decision: 'admit',
+        applicationVersion: 1,
+        reason: 'Synthetic admission for version 1.',
+        decidedAt: '2026-10-19T10:00:00Z',
+      },
+    });
+    mockApi.getMyHotelApplications.mockResolvedValueOnce({ items: [draft] });
+    mockApi.getAdmittedHotelWorkspace.mockResolvedValueOnce(draft);
+
+    render(
+      <HotelPilotSessionProvider accessToken="test-applicant-token">
+        <HotelApplicantScreen />
+      </HotelPilotSessionProvider>,
+    );
+
+    const card = await screen.findByRole('article', { name: 'New unsubmitted hotel name' });
+    fireEvent.click(within(card).getByRole('button', { name: 'View admitted workspace' }));
+
+    const details = await screen.findByLabelText('Admitted hotel workspace details');
+    const admittedVersionLabel = within(details).getByText('Admitted version:');
+    expect(admittedVersionLabel.parentElement?.textContent).toContain('1');
+    const draftHotelLabel = within(details).getByText('Current private draft hotel name:');
+    expect(draftHotelLabel.parentElement?.textContent).toContain('New unsubmitted hotel name');
+    expect(
+      within(details).getByText('Draft for next Bureau review · previous submitted version 3'),
+    ).toBeDefined();
+    expect(
+      within(details).getByText(
+        'This is private draft content, not a submitted or approved version. Earlier decisions do not approve this draft.',
+      ),
+    ).toBeDefined();
+    expect(admittedVersionLabel.parentElement?.textContent).not.toContain('3');
   });
 });
