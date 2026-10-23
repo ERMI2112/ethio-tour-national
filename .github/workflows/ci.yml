@@ -11,6 +11,10 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    # CI-only browser origins for Next.js builds; these are not deployment defaults.
+    env:
+      NEXT_PUBLIC_WORKSPACE_URL: http://localhost:3001
+      NEXT_PUBLIC_PUBLIC_URL: http://localhost:3000
     steps:
       - name: Checkout
         uses: actions/checkout@v4

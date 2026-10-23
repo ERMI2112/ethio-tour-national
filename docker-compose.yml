@@ -199,8 +199,8 @@ services:
       args:
         APP_NAME: public-web
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000/api}
-        NEXT_PUBLIC_WORKSPACE_URL: ${NEXT_PUBLIC_WORKSPACE_URL:-}
-        NEXT_PUBLIC_PUBLIC_URL: ${NEXT_PUBLIC_PUBLIC_URL:-}
+        NEXT_PUBLIC_WORKSPACE_URL: '${NEXT_PUBLIC_WORKSPACE_URL:?Set NEXT_PUBLIC_WORKSPACE_URL in the Compose environment file}'
+        NEXT_PUBLIC_PUBLIC_URL: '${NEXT_PUBLIC_PUBLIC_URL:?Set NEXT_PUBLIC_PUBLIC_URL in the Compose environment file}'
     profiles: [app]
     restart: unless-stopped
     environment:
@@ -230,8 +230,8 @@ services:
       args:
         APP_NAME: workspace-web
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000/api}
-        NEXT_PUBLIC_WORKSPACE_URL: ${NEXT_PUBLIC_WORKSPACE_URL:-}
-        NEXT_PUBLIC_PUBLIC_URL: ${NEXT_PUBLIC_PUBLIC_URL:-}
+        NEXT_PUBLIC_WORKSPACE_URL: '${NEXT_PUBLIC_WORKSPACE_URL:?Set NEXT_PUBLIC_WORKSPACE_URL in the Compose environment file}'
+        NEXT_PUBLIC_PUBLIC_URL: '${NEXT_PUBLIC_PUBLIC_URL:?Set NEXT_PUBLIC_PUBLIC_URL in the Compose environment file}'
     profiles: [app]
     restart: unless-stopped
     environment:
