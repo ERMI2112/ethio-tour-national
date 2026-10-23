@@ -19,6 +19,9 @@ import {
   type HotelAdmissionDecision,
   type HotelApplicationResponse,
 } from '../../lib/hotel-pilot-ui-state';
+import styles from './admin-admissions.module.css';
+
+type QueueErrorKind = 'denied' | 'failure';
 
 export function AdminHotelAdmissionsScreen() {
   const { accessToken, signIn } = useHotelPilotSession();
@@ -31,6 +34,11 @@ export function AdminHotelAdmissionsScreen() {
   const [applicationsToken, setApplicationsToken] = useState<string | null>(null);
   const [loadingToken, setLoadingToken] = useState<string | null>(null);
   const [errorToken, setErrorToken] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<QueueErrorKind | null>(null);
+  const [filters, setFilters] = useState<{ token: string | null; query: string }>({
+    token: accessToken,
+    query: '',
+  });
   const requestSequence = useRef(0);
   const currentToken = useRef(accessToken);
   const submissionInFlight = useRef(false);
@@ -42,6 +50,7 @@ export function AdminHotelAdmissionsScreen() {
     setLoadingToken(requestToken);
     setLoading(true);
     setError(null);
+    setErrorKind(null);
     setErrorToken(requestToken);
     try {
       const response = await getHotelAdmissionQueue({ accessToken: requestToken });
@@ -59,7 +68,13 @@ export function AdminHotelAdmissionsScreen() {
       ) {
         setApplications([]);
         setApplicationsToken(requestToken);
+        setFilters({ token: requestToken, query: '' });
       }
+      setErrorKind(
+        requestError instanceof ApiClientError && requestError.status === 403
+          ? 'denied'
+          : 'failure',
+      );
       setError(describeApiFailure(requestError, 'loading the admission queue'));
       return false;
     } finally {
@@ -77,8 +92,10 @@ export function AdminHotelAdmissionsScreen() {
     setApplicationsToken(null);
     setError(null);
     setErrorToken(null);
+    setErrorKind(null);
     setNotice(null);
     setNoticeToken(null);
+    setFilters({ token: accessToken, query: '' });
     if (!accessToken) {
       return;
     }
@@ -91,8 +108,10 @@ export function AdminHotelAdmissionsScreen() {
       requestSequence.current++;
       setApplications([]);
       setApplicationsToken(null);
+      setFilters({ token: currentToken.current, query: '' });
       setError('Your authenticated session is missing or has expired.');
       setErrorToken(currentToken.current);
+      setErrorKind('failure');
     };
     if (typeof window !== 'undefined') {
       window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
@@ -124,6 +143,10 @@ export function AdminHotelAdmissionsScreen() {
         if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
           setApplications([]);
           setApplicationsToken(requestToken);
+          setFilters({ token: requestToken, query: '' });
+          setError(describeApiFailure(err, 'recording the Administrator decision'));
+          setErrorKind(err.status === 403 ? 'denied' : 'failure');
+          setErrorToken(requestToken);
         }
         throw err;
       }
@@ -136,8 +159,17 @@ export function AdminHotelAdmissionsScreen() {
   const isQueueLoading = Boolean(accessToken) && (loadingToken !== accessToken || loading);
   const visibleApplications = applicationsToken === accessToken ? applications : [];
   const visibleError = errorToken === accessToken ? error : null;
+  const visibleErrorKind = errorToken === accessToken ? errorKind : null;
   const visibleNotice = noticeToken === accessToken ? notice : null;
   const isQueueBusy = isQueueLoading || submittingId !== null;
+  const query = filters.token === accessToken ? filters.query : '';
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matchesApplication = (application: HotelApplicationResponse) =>
+    !normalizedQuery ||
+    `${application.content.claimedHotelName} ${formatLocationHierarchy(application.location)} ${application.content.applicantNotes}`
+      .toLocaleLowerCase()
+      .includes(normalizedQuery);
+  const matchingCount = visibleApplications.filter(matchesApplication).length;
 
   return (
     <HotelPilotFrame
@@ -147,7 +179,7 @@ export function AdminHotelAdmissionsScreen() {
       {!accessToken ? (
         <SessionUnavailable onSignIn={signIn} />
       ) : (
-        <section aria-labelledby="admission-queue-title">
+        <section className={styles.queue} aria-labelledby="admission-queue-title">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Private Administrator queue</p>
@@ -166,11 +198,43 @@ export function AdminHotelAdmissionsScreen() {
             Admission here does not activate a paid subscription, payment, public listing, or
             booking.
           </p>
+          <div className={styles.filters}>
+            <div className="form-field">
+              <label htmlFor="admin-admission-search">Search loaded applications</label>
+              <input
+                id="admin-admission-search"
+                type="search"
+                value={query}
+                onChange={(event) => setFilters({ token: accessToken, query: event.target.value })}
+                aria-describedby="admin-admission-search-hint"
+              />
+              <p id="admin-admission-search-hint" className="field-hint">
+                Hotel name, submitted location, or applicant notes. Searches only the records
+                already returned by the API.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!query}
+              onClick={() => setFilters({ token: accessToken, query: '' })}
+            >
+              Clear search
+            </button>
+          </div>
+          {applicationsToken === accessToken && (
+            <p className={styles.count} role="status" aria-live="polite" aria-atomic="true">
+              Showing {matchingCount} of {visibleApplications.length} loaded eligible applications
+            </p>
+          )}
           {isQueueLoading && <LoadingState label="Loading eligible applications…" />}
           {visibleError && (
-            <p className="error-message" role="alert">
-              {visibleError}
-            </p>
+            <div className={styles.queueError} role="alert">
+              <strong>
+                {visibleErrorKind === 'denied' ? 'Access denied' : 'Queue unavailable'}
+              </strong>
+              <p>{visibleError}</p>
+            </div>
           )}
           {visibleNotice && (
             <p className="success-message" role="status">
@@ -180,11 +244,21 @@ export function AdminHotelAdmissionsScreen() {
           {!isQueueLoading && visibleApplications.length === 0 && !visibleError && (
             <p className="empty-state">No eligible applications were returned by the API.</p>
           )}
+          {!isQueueLoading &&
+            visibleApplications.length > 0 &&
+            matchingCount === 0 &&
+            !visibleError && (
+              <p className="empty-state">
+                No loaded applications match this search. Clear the search to see the full loaded
+                queue.
+              </p>
+            )}
           <div className="card-stack">
             {visibleApplications.map((application) => (
               <AdmissionApplicationCard
                 key={`${accessToken}:${application.id}`}
                 application={application}
+                hidden={!matchesApplication(application)}
                 onDecide={decide}
                 onRefresh={reload}
                 isQueueBusy={isQueueBusy}
@@ -199,11 +273,13 @@ export function AdminHotelAdmissionsScreen() {
 
 function AdmissionApplicationCard({
   application,
+  hidden,
   onDecide,
   onRefresh,
   isQueueBusy,
 }: Readonly<{
   application: HotelApplicationResponse;
+  hidden: boolean;
   onDecide: (
     applicationId: string,
     request: { expectedVersion: number; decision: HotelAdmissionDecision; reason: string },
@@ -276,17 +352,26 @@ function AdmissionApplicationCard({
   }
 
   return (
-    <article className="application-card" aria-labelledby={`admission-${application.id}`}>
-      <div className="card-topline">
+    <article
+      className={`application-card ${styles.applicationCard}`}
+      aria-labelledby={`admission-${application.id}`}
+      hidden={hidden}
+    >
+      <div className={styles.cardTopline}>
         <div>
-          <p className="eyebrow">Application version {application.currentVersion}</p>
+          <p className="eyebrow">Submitted application version {application.currentVersion}</p>
           <h3 id={`admission-${application.id}`}>{application.content.claimedHotelName}</h3>
         </div>
         <span className="status status-neutral">
           {application.admissionStatus.replaceAll('_', ' ')}
         </span>
       </div>
-      {application.content.applicantNotes && <p>{application.content.applicantNotes}</p>}
+      {application.content.applicantNotes && (
+        <div className={styles.applicantNotes}>
+          <strong>Applicant notes</strong>
+          <p>{application.content.applicantNotes}</p>
+        </div>
+      )}
       <HotelLocationDetails
         location={application.location}
         selection={application.content.locationSelection}
@@ -299,16 +384,22 @@ function AdmissionApplicationCard({
         }
       />
       {application.bureauDecision && (
-        <div className="decision-details">
-          <strong>
-            Synthetic Bureau outcome: {application.bureauDecision.decision.replaceAll('_', ' ')}
-          </strong>
+        <section
+          className={styles.bureauContext}
+          aria-labelledby={`bureau-context-${application.id}`}
+        >
+          <h4 id={`bureau-context-${application.id}`}>Bureau decision context</h4>
+          <p>
+            <strong>
+              Synthetic Bureau outcome: {application.bureauDecision.decision.replaceAll('_', ' ')}
+            </strong>
+          </p>
           <p>{application.bureauDecision.reason}</p>
           <p className="muted">
-            Applies to version {application.bureauDecision.applicationVersion}; current version is{' '}
-            {application.currentVersion}.
+            Covers application version {application.bureauDecision.applicationVersion}. Current
+            submitted version: {application.currentVersion}.
           </p>
-        </div>
+        </section>
       )}
       {!eligible ? (
         <p className="notice">
