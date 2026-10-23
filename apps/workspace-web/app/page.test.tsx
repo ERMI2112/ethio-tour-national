@@ -56,6 +56,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -194,33 +195,34 @@ describe('workspace portal — session transitions', () => {
     );
   });
 
-  it('clears private content when session expires', async () => {
-    const session = createTestSession({ expiresAt: Date.now() + 50 });
+  it('clears identity and workflow links when the session expires', async () => {
+    vi.useFakeTimers();
+    const now = new Date('2026-10-23T09:00:00.000Z');
+    vi.setSystemTime(now);
+    const session = createTestSession({ expiresAt: now.getTime() + 50 });
     renderWithAuth(session);
-    // Immediately visible
+
     expect(screen.getByTestId('session-identity')).toBeDefined();
+    for (const linkName of [
+      'Applicant applications',
+      'Bureau review queue',
+      'Administrator admission',
+    ]) {
+      expect(screen.getByRole('link', { name: linkName })).toBeDefined();
+    }
 
-    // Wait for the session expiration timeout
-    await vi.waitFor(
-      () => {
-        expect(screen.queryByTestId('session-identity')).toBeNull();
-      },
-      { timeout: 2000 },
-    );
-    // After session expires, sign-in prompt should appear
-    expect(screen.getByText('Sign in to continue')).toBeDefined();
-  });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(51);
+    });
 
-  it('does not show workflow links after session clears', async () => {
-    const session = createTestSession({ expiresAt: Date.now() + 50 });
-    renderWithAuth(session);
-    expect(screen.getByText('Applicant applications')).toBeDefined();
-
-    await vi.waitFor(
-      () => {
-        expect(screen.queryByText('Applicant applications')).toBeNull();
-      },
-      { timeout: 2000 },
-    );
+    expect(screen.queryByTestId('session-identity')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Sign in to continue' })).toBeDefined();
+    for (const linkName of [
+      'Applicant applications',
+      'Bureau review queue',
+      'Administrator admission',
+    ]) {
+      expect(screen.queryByRole('link', { name: linkName })).toBeNull();
+    }
   });
 });
