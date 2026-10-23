@@ -1,0 +1,70 @@
+.workspaceShell {
+  min-width: 0;
+}
+
+.backLink {
+  margin-bottom: 1rem;
+}
+
+.admittedCard {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cardTopline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.versionBadge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  background: #e6f4ea;
+  color: #137333;
+  border: 1px solid #ceead6;
+}
+
+.admittedContext {
+  margin-block: 1rem;
+  border-left: 4px solid #145b49;
+  padding: 0.8rem 1rem;
+  background: #edf2ee;
+  overflow-wrap: anywhere;
+}
+
+.admittedContext h4 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.admittedContext p {
+  margin-block: 0.4rem;
+}
+
+.disclaimer {
+  margin-block: 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid #52615a;
+  background: #f5f7f6;
+  color: #384841;
+}
+
+.versionSeparationNotice {
+  margin-block: 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid #d97706;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+@media (max-width: 640px) {
+  .cardTopline {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+}

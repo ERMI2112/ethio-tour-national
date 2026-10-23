@@ -1,0 +1,187 @@
+.portal {
+  min-width: 0;
+}
+
+.overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block: 0.75rem 1.25rem;
+}
+
+.overviewPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  background: #f0f4f2;
+  border: 1px solid #d2ddd7;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+  color: #384841;
+}
+
+.overviewCount {
+  font-weight: 700;
+  color: #145b49;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 1rem;
+  padding-block: 1rem;
+  border-block: 1px solid #d2ddd7;
+}
+
+.filters input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.filters > button {
+  margin-bottom: 0.1rem;
+}
+
+.count {
+  margin-block: 1rem;
+  color: #52615a;
+}
+
+.portalError {
+  margin-block: 1rem;
+  border-left: 4px solid #a7352a;
+  padding: 0.75rem 1rem;
+  color: #69251f;
+  background: #fff2ef;
+}
+
+.portalError p {
+  margin-block: 0.35rem 0;
+  overflow-wrap: anywhere;
+}
+
+.applicationCard {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.applicationCard[hidden] {
+  display: none;
+}
+
+.cardTopline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.cardTopline > div {
+  min-width: 0;
+}
+
+.applicantNotes {
+  margin-block: 1rem;
+  border-left: 3px solid #b6c7be;
+  padding-left: 0.8rem;
+}
+
+.applicantNotes p {
+  margin-block: 0.35rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.draftForm {
+  margin-top: 1.25rem;
+  border-top: 1px solid #d2ddd7;
+  padding-top: 1rem;
+}
+
+.draftHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.unsavedBadge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+
+.savedBadge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: #e6f4ea;
+  color: #137333;
+  border: 1px solid #ceead6;
+}
+
+.submissionGuidance {
+  margin-block: 1rem;
+  border-left: 4px solid #145b49;
+  padding: 0.8rem 1rem;
+  background: #edf2ee;
+  overflow-wrap: anywhere;
+}
+
+.submissionGuidance p {
+  margin-block: 0.35rem;
+}
+
+.staleNotice {
+  margin-block: 0.75rem;
+  border-left: 4px solid #d97706;
+  padding: 0.75rem 1rem;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.workspacePanel {
+  margin-top: 1rem;
+  border: 1px solid #b6c7be;
+  border-radius: 6px;
+  background: #f7faf8;
+  padding: 1rem;
+}
+
+.workspaceActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .filters > button {
+    justify-self: start;
+  }
+
+  .cardTopline {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .overview {
+    flex-direction: column;
+  }
+}
