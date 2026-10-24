@@ -297,6 +297,7 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 12px;
   padding: 1.5rem 1.75rem;
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
@@ -332,7 +333,7 @@ button {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #bf5a24;
+  background: #a84e20;
   color: #fff;
   font-weight: 800;
   font-size: 0.85rem;
@@ -350,7 +351,7 @@ button {
 .workflow-step-content p {
   margin: 0;
   font-size: 0.88rem;
-  color: rgba(255, 255, 255, 0.88);
+  color: rgba(255, 255, 255, 0.92);
   line-height: 1.45;
 }
 
@@ -358,7 +359,7 @@ button {
   display: flex;
   align-items: center;
   padding-left: 0.65rem;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.8);
   font-size: 0.95rem;
 }
 
@@ -372,7 +373,7 @@ button {
   padding-top: 1rem;
   border-top: 1px solid rgba(255, 255, 255, 0.16);
   font-size: 0.82rem;
-  color: rgba(255, 255, 255, 0.82);
+  color: rgba(255, 255, 255, 0.88);
   line-height: 1.45;
   font-style: italic;
 }
@@ -382,7 +383,6 @@ button {
   background: #fff8f3;
   border-top: 1px solid #fad2bc;
   border-bottom: 1px solid #fad2bc;
-  border-left: 5px solid #bf5a24;
   padding: 1.25rem 0;
 }
 
@@ -400,7 +400,7 @@ button {
   justify-content: center;
   padding: 0.3rem 0.65rem;
   border-radius: 4px;
-  background: #bf5a24;
+  background: #a84e20;
   color: #fff;
   font-size: 0.78rem;
   font-weight: 800;
@@ -408,7 +408,6 @@ button {
   letter-spacing: 0.04em;
   white-space: nowrap;
   flex-shrink: 0;
-  margin-top: 0.15rem;
 }
 
 .pilot-notice-body {
@@ -518,7 +517,7 @@ button {
 .entry-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
 .entry-card {
@@ -526,7 +525,7 @@ button {
   flex-direction: column;
   border: 1px solid #d2ddd7;
   border-radius: 10px;
-  padding: 1.5rem;
+  padding: 1.25rem;
   background: #f4f7f5;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
   transition:
@@ -549,7 +548,7 @@ button {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #bf5a24;
+  color: #a84e20;
   margin-bottom: 0.35rem;
 }
 
@@ -561,7 +560,7 @@ button {
 }
 
 .entry-card-desc {
-  margin: 0 0 1.5rem;
+  margin: 0 0 1.25rem;
   color: #52615a;
   font-size: 0.92rem;
   line-height: 1.55;
@@ -683,7 +682,7 @@ button {
 @media (max-width: 960px) {
   .hero-grid {
     grid-template-columns: 1fr;
-    gap: 2.5rem;
+    gap: 2rem;
   }
 
   .entry-grid {
@@ -712,7 +711,11 @@ button {
 
   .entry-grid {
     grid-template-columns: 1fr;
-    gap: 1rem;
+    gap: 1.25rem;
+  }
+
+  .entry-card {
+    padding: 1.25rem;
   }
 
   .footer-grid {

@@ -63,7 +63,9 @@ describe('public homepage', () => {
     expect(html).toContain('does not establish government jurisdiction or licensing authority');
     expect(html).toContain('does not provide public hotel booking or payment capabilities');
     expect(html).toContain('not licenses or proof of authority');
-    expect(html).toContain('Admission does not publish a hotel or activate a subscription.');
+    expect(html).toContain(
+      'Approval can lead to access to the property&#x27;s private workspace, but does not publish a hotel or activate a subscription.',
+    );
 
     // Implemented capabilities:
     expect(html).toContain('Hotel Onboarding');
@@ -98,6 +100,11 @@ describe('public homepage', () => {
 
     expect(html).toContain('href="http://localhost:3001/admin/hotel-admissions"');
     expect(html).toContain('Go to Admission Queue →');
+
+    // Admission card limitation:
+    expect(html).toContain(
+      'where approval can lead to access to the property&#x27;s private workspace, but does not publish a hotel or activate a subscription.',
+    );
 
     // Navigation does not imply permission:
     expect(html).toContain('Navigation links do not grant access permissions.');
