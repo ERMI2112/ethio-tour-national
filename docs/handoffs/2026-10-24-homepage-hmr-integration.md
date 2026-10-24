@@ -67,11 +67,13 @@ callback was `http://localhost:3121/auth/callback`. No service was started.
   explicit test origins. Next.js emitted a non-fatal ESLint-plugin warning.
 - Freebuff independently reported public-web tests **25/25 passed**, plus
   typecheck, lint, and diff-check passed on `18bd80e`.
-- The scoped Prettier check of the six source files and this handoff exited 1:
-  Prettier reports formatting differences in `apps/public-web/app/globals.css`,
+- After the scoped check identified three formatting failures, ran
+  `pnpm exec prettier --write` only on `apps/public-web/app/globals.css`,
   `apps/public-web/app/page.test.tsx`, and `apps/public-web/app/page.tsx`.
-  Those reviewed source files were left unchanged. The handoff was formatted
-  separately and its scoped check passed.
+  The scoped `pnpm exec prettier --check` then passed for those files. Staging
+  only those paths produced no source diff from merge commit `7cca186`, so the
+  formatter left no tracked source changes. The handoff also passes its scoped
+  Prettier check.
 - `git diff --check`: passed.
 
 The serial package tests, lint, typecheck, and build were executed on merged
