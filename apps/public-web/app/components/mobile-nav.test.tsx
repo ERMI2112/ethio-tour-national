@@ -16,6 +16,7 @@ beforeEach(() => {
     root.render(
       <MobileNav>
         <a href="/">Home</a>
+        <a href="http://localhost:3001">Workspace →</a>
       </MobileNav>,
     ),
   );
@@ -26,6 +27,26 @@ afterEach(() => {
 });
 
 describe('mobile navigation interactions', () => {
+  it('initializes with menu closed and accessible aria attributes', () => {
+    const toggle = container.querySelector('button')!;
+    const nav = container.querySelector('nav')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-label')).toBe('Open navigation menu');
+    expect(toggle.textContent).toBe('☰');
+    expect(nav.getAttribute('data-open')).toBe('false');
+    expect(nav.getAttribute('aria-label')).toBe('Main navigation');
+  });
+
+  it('opens navigation menu on toggle click and updates state', () => {
+    const toggle = container.querySelector('button')!;
+    const nav = container.querySelector('nav')!;
+    act(() => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe('Close navigation menu');
+    expect(toggle.textContent).toBe('✕');
+    expect(nav.getAttribute('data-open')).toBe('true');
+  });
+
   it('closes on a second toggle click even with the document outside-click listener active', () => {
     const toggle = container.querySelector('button')!;
     act(() => toggle.click());

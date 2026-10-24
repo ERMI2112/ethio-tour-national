@@ -192,6 +192,13 @@ button {
   padding: 4.5rem 0 4rem;
 }
 
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 3rem;
+  align-items: center;
+}
+
 .hero-pattern {
   position: absolute;
   inset: 0;
@@ -223,7 +230,7 @@ button {
   margin: 0 0 1rem;
   font-size: 2.5rem;
   font-weight: 800;
-  line-height: 1.1;
+  line-height: 1.15;
   letter-spacing: 0;
 }
 
@@ -282,6 +289,146 @@ button {
 .hero-cta-secondary:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* ─── Hero Workflow Presentation ─── */
+.hero-workflow-card {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 12px;
+  padding: 1.5rem 1.75rem;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.workflow-title {
+  margin: 0 0 1.25rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workflow-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.workflow-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.workflow-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #bf5a24;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.workflow-step-content h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.workflow-step-content p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.45;
+}
+
+.workflow-connector {
+  display: flex;
+  align-items: center;
+  padding-left: 0.65rem;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.95rem;
+}
+
+.connector-arrow {
+  display: inline-block;
+  line-height: 1;
+}
+
+.workflow-disclaimer {
+  margin: 1.25rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.82);
+  line-height: 1.45;
+  font-style: italic;
+}
+
+/* ─── Consolidated Pilot Notice ─── */
+.pilot-notice-banner {
+  background: #fff8f3;
+  border-top: 1px solid #fad2bc;
+  border-bottom: 1px solid #fad2bc;
+  border-left: 5px solid #bf5a24;
+  padding: 1.25rem 0;
+}
+
+.pilot-notice-inner {
+  width: min(100% - 2rem, 1100px);
+  margin-inline: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+}
+
+.pilot-notice-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.65rem;
+  border-radius: 4px;
+  background: #bf5a24;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
+.pilot-notice-body {
+  flex: 1;
+}
+
+.pilot-notice-body p {
+  margin: 0 0 0.45rem;
+  color: #3b2b20;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.pilot-notice-body p:last-child {
+  margin-bottom: 0;
+}
+
+.pilot-notice-legal {
+  color: #6b5547;
+  font-size: 0.85rem;
 }
 
 /* ─── Section Layout ─── */
@@ -370,43 +517,84 @@ button {
 
 .entry-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 1.25rem;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
 }
 
 .entry-card {
+  display: flex;
+  flex-direction: column;
   border: 1px solid #d2ddd7;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 1.5rem;
   background: #f4f7f5;
-  transition: border-color 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .entry-card:hover {
   border-color: #145b49;
+  box-shadow: 0 4px 12px rgba(20, 91, 73, 0.08);
+}
+
+.entry-card-header {
+  margin-bottom: 0.75rem;
+}
+
+.entry-card-audience {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #bf5a24;
+  margin-bottom: 0.35rem;
 }
 
 .entry-card h3 {
-  margin: 0 0 0.4rem;
-  font-size: 1.05rem;
-  font-weight: 700;
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 800;
   color: #1c2925;
 }
 
-.entry-card p {
-  margin: 0 0 1rem;
+.entry-card-desc {
+  margin: 0 0 1.5rem;
   color: #52615a;
   font-size: 0.92rem;
-  line-height: 1.5;
+  line-height: 1.55;
+  flex-grow: 1;
 }
 
-.entry-card-link {
+.entry-card-action {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  font-weight: 700;
-  font-size: 0.9rem;
+  justify-content: center;
+  margin-top: auto;
+  padding: 0.65rem 1rem;
+  border-radius: 6px;
+  background: #fff;
+  border: 1.5px solid #145b49;
   color: #145b49;
+  font-weight: 700;
+  font-size: 0.92rem;
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.entry-card-action:hover {
+  background: #145b49;
+  color: #fff;
+}
+
+.entry-card-action:focus-visible {
+  outline: 3px solid #bf5a24;
+  outline-offset: 2px;
 }
 
 /* ─── Site Footer ─── */
@@ -492,13 +680,39 @@ button {
   font-size: 0.82rem;
 }
 
+@media (max-width: 960px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  .entry-grid {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1.25rem;
+  }
+}
+
 @media (max-width: 640px) {
   .hero-inner {
     padding: 3rem 0 2.5rem;
   }
 
+  .hero h1 {
+    font-size: 2rem;
+  }
+
   .content-section {
     padding: 2.5rem 0;
+  }
+
+  .pilot-notice-inner {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .entry-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
   }
 
   .footer-grid {
