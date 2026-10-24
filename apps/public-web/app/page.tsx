@@ -202,9 +202,8 @@ export default function PublicHomePage() {
                   <h3>Admission Queue</h3>
                 </div>
                 <p className="entry-card-desc">
-                  Manage the platform admission pipeline, where approval can lead to access to the
-                  property&apos;s private workspace, but does not publish a hotel or activate a
-                  subscription.
+                  Manage the platform admission pipeline, evaluate approved applications, and
+                  provision private workspace access.
                 </p>
                 <a href={`${workspaceUrl}/admin/hotel-admissions`} className="entry-card-action">
                   Go to Admission Queue →
