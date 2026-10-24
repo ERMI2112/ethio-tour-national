@@ -42,9 +42,14 @@ describe('public homepage', () => {
     expect(html).toContain('href="#platform" class="hero-cta-secondary">Learn More</a>');
   });
 
-  it('renders a responsive workflow presentation in the hero without implying guaranteed approval', () => {
+  it('renders workflow presentation content in the hero without implying guaranteed approval', () => {
     const html = renderToStaticMarkup(<PublicHomePage />);
-    expect(html).toContain('Application Workflow');
+    expect(html).toContain('class="hero-workflow-card"');
+    expect(html).toContain('aria-labelledby="workflow-title"');
+    expect(html).toContain(
+      '<h2 class="workflow-title" id="workflow-title">Application Workflow</h2>',
+    );
+    expect(html).not.toContain('id="workflow"');
     expect(html).toContain('Prepare application');
     expect(html).toContain('Bureau review');
     expect(html).toContain('Admission decision');
@@ -58,6 +63,7 @@ describe('public homepage', () => {
     expect(html).toContain('does not establish government jurisdiction or licensing authority');
     expect(html).toContain('does not provide public hotel booking or payment capabilities');
     expect(html).toContain('not licenses or proof of authority');
+    expect(html).toContain('Admission does not publish a hotel or activate a subscription.');
 
     // Implemented capabilities:
     expect(html).toContain('Hotel Onboarding');

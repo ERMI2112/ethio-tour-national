@@ -48,12 +48,10 @@ export default function PublicHomePage() {
                 </div>
               </div>
 
-              <div
-                className="hero-workflow-card"
-                id="workflow"
-                aria-label="Application workflow stages"
-              >
-                <h2 className="workflow-title">Application Workflow</h2>
+              <section className="hero-workflow-card" aria-labelledby="workflow-title">
+                <h2 className="workflow-title" id="workflow-title">
+                  Application Workflow
+                </h2>
                 <ol className="workflow-steps">
                   <li className="workflow-step">
                     <span className="workflow-step-num" aria-hidden="true">
@@ -95,7 +93,7 @@ export default function PublicHomePage() {
                   Admission is evaluated after review; submission or review does not guarantee
                   admission.
                 </p>
-              </div>
+              </section>
             </div>
           </div>
         </section>
@@ -154,7 +152,7 @@ export default function PublicHomePage() {
               <h3>Private Admission</h3>
               <p>
                 After approval of the current version, a platform administrator can grant private
-                workspace admission to the property’s private area.
+                workspace admission. Admission does not publish a hotel or activate a subscription.
               </p>
             </div>
           </div>
