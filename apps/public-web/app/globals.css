@@ -255,7 +255,7 @@ button {
   padding: 0.75rem 1.5rem;
   border: none;
   border-radius: 8px;
-  background: #bf5a24;
+  background: #a84e20;
   color: #fff;
   font-weight: 700;
   font-size: 1rem;
@@ -265,7 +265,7 @@ button {
 }
 
 .hero-cta-primary:hover {
-  background: #a84e20;
+  background: #8f3d13;
 }
 
 .hero-cta-secondary {
@@ -289,6 +289,12 @@ button {
 .hero-cta-secondary:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.6);
+}
+
+.hero a:focus-visible,
+.hero button:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
 }
 
 /* ─── Hero Workflow Presentation ─── */
@@ -687,7 +693,6 @@ button {
 
   .entry-grid {
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 1.25rem;
   }
 }
 
@@ -711,11 +716,6 @@ button {
 
   .entry-grid {
     grid-template-columns: 1fr;
-    gap: 1.25rem;
-  }
-
-  .entry-card {
-    padding: 1.25rem;
   }
 
   .footer-grid {

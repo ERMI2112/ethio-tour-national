@@ -101,9 +101,9 @@ describe('public homepage', () => {
     expect(html).toContain('href="http://localhost:3001/admin/hotel-admissions"');
     expect(html).toContain('Go to Admission Queue →');
 
-    // Admission card limitation:
+    // Concise audience action description:
     expect(html).toContain(
-      'where approval can lead to access to the property&#x27;s private workspace, but does not publish a hotel or activate a subscription.',
+      'Manage the platform admission pipeline, evaluate approved applications, and provision private workspace access.',
     );
 
     // Navigation does not imply permission:
