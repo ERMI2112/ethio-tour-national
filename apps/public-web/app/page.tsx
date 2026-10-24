@@ -30,31 +30,101 @@ export default function PublicHomePage() {
         <section className="hero">
           <div className="hero-pattern" aria-hidden="true" />
           <div className="hero-inner">
-            <p className="hero-eyebrow">Synthetic hotel onboarding pilot</p>
-            <h1>EthioTour National</h1>
-            <p className="hero-subtitle">
-              A private application and review workspace for a controlled synthetic pilot. Pilot
-              outcomes are not licenses or proof of authority to represent a hotel.
-            </p>
-            <div className="hero-actions">
-              <a href={workspaceUrl} className="hero-cta-primary">
-                Open Workspace
-              </a>
-              <a href="#platform" className="hero-cta-secondary">
-                Learn More
-              </a>
+            <div className="hero-grid">
+              <div className="hero-content">
+                <p className="hero-eyebrow">Hotel onboarding pilot</p>
+                <h1>Manage your hotel application in one place.</h1>
+                <p className="hero-subtitle">
+                  Prepare your application, follow its review progress, and access your private
+                  workspace after admission.
+                </p>
+                <div className="hero-actions">
+                  <a href={workspaceUrl} className="hero-cta-primary">
+                    Open Workspace
+                  </a>
+                  <a href="#platform" className="hero-cta-secondary">
+                    Learn More
+                  </a>
+                </div>
+              </div>
+
+              <div
+                className="hero-workflow-card"
+                id="workflow"
+                aria-label="Application workflow stages"
+              >
+                <h2 className="workflow-title">Application Workflow</h2>
+                <ol className="workflow-steps">
+                  <li className="workflow-step">
+                    <span className="workflow-step-num" aria-hidden="true">
+                      1
+                    </span>
+                    <div className="workflow-step-content">
+                      <h3>Prepare application</h3>
+                      <p>Draft hotel details and select a declared location for review.</p>
+                    </div>
+                  </li>
+                  <li className="workflow-connector" aria-hidden="true">
+                    <span className="connector-arrow">↓</span>
+                  </li>
+                  <li className="workflow-step">
+                    <span className="workflow-step-num" aria-hidden="true">
+                      2
+                    </span>
+                    <div className="workflow-step-content">
+                      <h3>Bureau review</h3>
+                      <p>
+                        Regional review evaluates submitted versions and records determinations.
+                      </p>
+                    </div>
+                  </li>
+                  <li className="workflow-connector" aria-hidden="true">
+                    <span className="connector-arrow">↓</span>
+                  </li>
+                  <li className="workflow-step">
+                    <span className="workflow-step-num" aria-hidden="true">
+                      3
+                    </span>
+                    <div className="workflow-step-content">
+                      <h3>Admission decision</h3>
+                      <p>Approved applications are evaluated for private workspace access.</p>
+                    </div>
+                  </li>
+                </ol>
+                <p className="workflow-disclaimer">
+                  Admission is evaluated after review; submission or review does not guarantee
+                  admission.
+                </p>
+              </div>
             </div>
           </div>
         </section>
+
+        <aside className="pilot-notice-banner" aria-label="Pilot notice and limitations">
+          <div className="pilot-notice-inner">
+            <span className="pilot-notice-badge">Pilot Notice</span>
+            <div className="pilot-notice-body">
+              <p>
+                <strong>Synthetic demonstration &amp; private workflow:</strong> This platform is a
+                controlled pilot demonstrating private hotel onboarding workflows. It does not
+                establish government jurisdiction or licensing authority, and does not provide
+                public hotel booking or payment capabilities.
+              </p>
+              <p className="pilot-notice-legal">
+                Outcomes in this pilot are private workflow determinations, not licenses or proof of
+                authority to represent a hotel.
+              </p>
+            </div>
+          </div>
+        </aside>
 
         <section id="platform" className="content-section" aria-labelledby="platform-title">
           <h2 className="section-title" id="platform-title">
             The current hotel pilot
           </h2>
           <p className="section-lead">
-            Synthetic applicants, assigned Bureau reviewers, and platform administrators use
-            separate private work areas. Public hotel listings, bookings, and payments are not
-            available in this pilot.
+            Applicants, assigned Bureau reviewers, and platform administrators collaborate through
+            separate private work areas designed for clear tracking and versioned review.
           </p>
           <div className="features-grid">
             <div className="feature-card">
@@ -73,9 +143,8 @@ export default function PublicHomePage() {
               </div>
               <h3>Synthetic Bureau Review</h3>
               <p>
-                Server-configured synthetic offices review their assigned application versions.
-                These demo assignments do not establish real office jurisdictions or legal
-                authority.
+                Server-configured synthetic offices review their assigned application versions and
+                record version-specific determinations.
               </p>
             </div>
             <div className="feature-card">
@@ -85,7 +154,7 @@ export default function PublicHomePage() {
               <h3>Private Admission</h3>
               <p>
                 After approval of the current version, a platform administrator can grant private
-                workspace admission. Admission does not publish a hotel or activate a subscription.
+                workspace admission to the property’s private area.
               </p>
             </div>
           </div>
@@ -94,34 +163,54 @@ export default function PublicHomePage() {
         <section className="entry-section" aria-labelledby="get-started-title">
           <div className="content-section">
             <h2 className="section-title" id="get-started-title">
-              Get started
+              Workspace Access
             </h2>
             <p className="section-lead">
-              Access the private workspace to participate in EthioTour National workflows. All
-              workspace operations require authentication.
+              Direct access to role-specific workspace areas. All operations require authentication
+              with authorized credentials. Navigation links do not grant access permissions.
             </p>
             <div className="entry-grid">
-              <a href={workspaceUrl} className="entry-card" style={{ textDecoration: 'none' }}>
-                <h3>Hotel Operators</h3>
-                <p>
-                  Apply for hotel onboarding, manage your application, and access your admitted
-                  workspace.
+              <div className="entry-card">
+                <div className="entry-card-header">
+                  <span className="entry-card-audience">Hotel Operators</span>
+                  <h3>Hotel Applications</h3>
+                </div>
+                <p className="entry-card-desc">
+                  Create and manage hotel onboarding drafts, track version-specific review progress,
+                  and access your admitted private workspace.
                 </p>
-                <span className="entry-card-link">Go to Workspace →</span>
-              </a>
-              <a href={workspaceUrl} className="entry-card" style={{ textDecoration: 'none' }}>
-                <h3>Bureau Officers</h3>
-                <p>
-                  Review assigned synthetic hotel applications and record version-specific
-                  decisions.
+                <a href={`${workspaceUrl}/hotels`} className="entry-card-action">
+                  Go to Hotel Applications →
+                </a>
+              </div>
+
+              <div className="entry-card">
+                <div className="entry-card-header">
+                  <span className="entry-card-audience">Bureau Officers</span>
+                  <h3>Bureau Review</h3>
+                </div>
+                <p className="entry-card-desc">
+                  Inspect assigned application versions, verify declared location hierarchies, and
+                  record regional review determinations.
                 </p>
-                <span className="entry-card-link">Go to Workspace →</span>
-              </a>
-              <a href={workspaceUrl} className="entry-card" style={{ textDecoration: 'none' }}>
-                <h3>Administrators</h3>
-                <p>Manage platform admissions and oversee the onboarding pipeline.</p>
-                <span className="entry-card-link">Go to Workspace →</span>
-              </a>
+                <a href={`${workspaceUrl}/bureau/hotel-cases`} className="entry-card-action">
+                  Go to Bureau Review →
+                </a>
+              </div>
+
+              <div className="entry-card">
+                <div className="entry-card-header">
+                  <span className="entry-card-audience">Administrators</span>
+                  <h3>Admission Queue</h3>
+                </div>
+                <p className="entry-card-desc">
+                  Manage the platform admission pipeline, evaluate approved applications, and
+                  provision private workspace access.
+                </p>
+                <a href={`${workspaceUrl}/admin/hotel-admissions`} className="entry-card-action">
+                  Go to Admission Queue →
+                </a>
+              </div>
             </div>
           </div>
         </section>
@@ -158,7 +247,7 @@ export default function PublicHomePage() {
                   <a href={`${workspaceUrl}/bureau/hotel-cases`}>Bureau Review</a>
                 </li>
                 <li>
-                  <a href={`${workspaceUrl}/admin/hotel-admissions`}>Admissions</a>
+                  <a href={`${workspaceUrl}/admin/hotel-admissions`}>Admission Queue</a>
                 </li>
               </ul>
             </div>
