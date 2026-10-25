@@ -7,6 +7,7 @@ import { createBackendRuntime } from '@ethio-tour/backend-domain';
 import { migrateDatabase } from '@ethio-tour/db';
 
 import { AppModule } from './app.module';
+import { corsAllowedOrigins } from './security/cors';
 
 async function bootstrap(): Promise<void> {
   const runtime = createBackendRuntime('api');
@@ -17,7 +18,7 @@ async function bootstrap(): Promise<void> {
 
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');
-  app.enableCors({ origin: true });
+  app.enableCors({ origin: corsAllowedOrigins() });
   app.useGlobalPipes(
     new ValidationPipe({
       forbidUnknownValues: true,
